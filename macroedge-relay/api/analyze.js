@@ -1,7 +1,7 @@
 // api/analyze.js
 // Relais serverless (Vercel) — 3 fonctions dans un seul fichier :
 //  - action "chat"     : appel IA multi-provider (Anthropic / OpenAI / Gemini)
-//  - action "quotes"   : prix de marché live via Twelve Data (clé gratuite, 800 req/jour)
+//  - action "quotes"   : prix de marché live via Alpha Vantage (clé gratuite)
 //  - action "calendar" : calendrier économique — Finnhub si clé fournie, sinon repli
 //                         automatique et gratuit sur le flux JSON public ForexFactory
 
@@ -124,65 +124,82 @@ async function callGemini({ apiKey, system, messages, model, res }) {
 }
 
 /* =========================================================
-   ACTION: quotes  →  Twelve Data (clé gratuite, 800 req/jour)
+   ACTION: quotes  →  Alpha Vantage
+   GET  /api/analyze?action=quotes&apiKey=...&symbols=EUR/USD,XAU/USD
    ========================================================= */
 async function handleQuotes(req, res) {
   const apiKey  = req.method === 'GET' ? req.query.apiKey  : req.body?.apiKey;
   const symbols = req.method === 'GET' ? req.query.symbols : req.body?.symbols;
 
   if (!apiKey) {
-    return res.status(400).json({ error: 'Clé Twelve Data manquante (paramètre apiKey).' });
+    return res.status(400).json({ error: 'Clé Alpha Vantage manquante (paramètre apiKey).' });
   }
   if (!symbols) {
-    return res.status(400).json({ error: 'Paramètre "symbols" manquant (ex: EUR/USD,XAU/USD,WTI/USD).' });
+    return res.status(400).json({ error: 'Paramètre "symbols" manquant (ex: EUR/USD,XAU/USD).' });
   }
 
   const symbolList = String(symbols).split(',').map(s => s.trim()).filter(Boolean);
-  const url = `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(symbolList.join(','))}&apikey=${apiKey}`;
 
   try {
-    const r = await fetch(url);
-    const data = await r.json();
+    const results = await Promise.all(symbolList.map(async (sym) => {
+      let url = '';
+      if (sym.includes('/')) {
+        const [from, to] = sym.split('/');
+        url = `https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=${encodeURIComponent(from)}&to_currency=${encodeURIComponent(to)}&apikey=${apiKey}`;
+      } else {
+        url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${encodeURIComponent(sym)}&apikey=${apiKey}`;
+      }
 
-    // Même en cas d'erreur globale d'API, on ne bloque pas si c'est une clé invalide
-    if (data?.code === 401 || data?.code === 429) {
-      return res.status(400).json({ error: data?.message || 'Clé Twelve Data invalide ou quota dépassé.' });
-    }
+      const r = await fetch(url);
+      const data = await r.json();
+      return normalizeAlphaVantageQuote(sym, data);
+    }));
 
-    let normalized = [];
-    if (symbolList.length === 1) {
-      normalized = [normalizeQuote(symbolList[0], data)];
-    } else {
-      normalized = symbolList.map(sym => normalizeQuote(sym, data[sym] || {}));
-    }
-
-    return res.status(200).json({ quotes: normalized, fetched_at: new Date().toISOString() });
+    return res.status(200).json({ quotes: results, fetched_at: new Date().toISOString() });
   } catch (err) {
-    return res.status(500).json({ error: 'Erreur lors de la récupération des prix Twelve Data.' });
+    return res.status(500).json({ error: 'Erreur lors de la récupération des prix Alpha Vantage : ' + err.message });
   }
 }
 
-function normalizeQuote(symbol, q) {
-  // Gestion tolérante : si le symbole échoue ou nécessite un plan payant (ex: DXY), on renvoie ok: false
-  if (!q || q.status === 'error' || !q.close) {
-    return { 
-      symbol, 
-      ok: false, 
-      error: q?.message || 'Symbole indisponible sur ce plan Twelve Data.' 
+function normalizeAlphaVantageQuote(symbol, data) {
+  // Traitement pour les devises & forex (CURRENCY_EXCHANGE_RATE)
+  if (data['Realtime Currency Exchange Rate']) {
+    const rate = data['Realtime Currency Exchange Rate'];
+    const price = parseFloat(rate['5. Exchange Rate']);
+    return {
+      symbol,
+      ok: true,
+      price: price,
+      change: 0,
+      percent_change: 0,
+      previous_close: null,
+      datetime: rate['6. Last Refreshed'] || null,
     };
   }
-  const close = parseFloat(q.close);
-  const prevClose = parseFloat(q.previous_close);
-  const change = q.change != null ? parseFloat(q.change) : (close - prevClose);
-  const percent = q.percent_change != null ? parseFloat(q.percent_change) : (prevClose ? (change / prevClose) * 100 : 0);
-  return {
-    symbol,
-    ok: true,
-    price: close,
-    change,
-    percent_change: percent,
-    previous_close: prevClose || null,
-    datetime: q.datetime || null,
+
+  // Traitement pour les autres actifs (GLOBAL_QUOTE)
+  if (data['Global Quote'] && data['Global Quote']['05. price']) {
+    const quote = data['Global Quote'];
+    const price = parseFloat(quote['05. price']);
+    const change = parseFloat(quote['09. change'] || 0);
+    const percentStr = quote['10. change percent'] || '0%';
+    const percent = parseFloat(percentStr.replace('%', ''));
+
+    return {
+      symbol,
+      ok: true,
+      price: price,
+      change: change,
+      percent_change: percent,
+      previous_close: parseFloat(quote['08. previous close'] || 0) || null,
+      datetime: quote['07. latest trading day'] || null,
+    };
+  }
+
+  return { 
+    symbol, 
+    ok: false, 
+    error: data['Note'] || data['Information'] || 'Symbole indisponible ou limite de requêtes atteinte.' 
   };
 }
 
@@ -213,7 +230,7 @@ async function handleCalendar(req, res) {
         return res.status(200).json({ source: 'finnhub', events, fetched_at: new Date().toISOString() });
       }
     } catch (e) {
-      // fallback ci-dessous
+      // repli automatique
     }
   }
 
