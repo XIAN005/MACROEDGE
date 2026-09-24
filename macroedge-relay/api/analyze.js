@@ -4,11 +4,6 @@
 //  - action "quotes"   : prix de marché live via Twelve Data (clé gratuite, 800 req/jour)
 //  - action "calendar" : calendrier économique — Finnhub si clé fournie, sinon repli
 //                         automatique et gratuit sur le flux JSON public ForexFactory
-//
-// Aucune clé n'est stockée ni logguée côté serveur : elle transite uniquement
-// dans le corps de la requête pour l'appel externe, puis est jetée.
-//
-// Déploiement : voir README.md à la racine de ce dossier.
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -130,7 +125,6 @@ async function callGemini({ apiKey, system, messages, model, res }) {
 
 /* =========================================================
    ACTION: quotes  →  Twelve Data (clé gratuite, 800 req/jour)
-   GET  /api/analyze?action=quotes&apiKey=...&symbols=DXY,XAU/USD,EUR/USD
    ========================================================= */
 async function handleQuotes(req, res) {
   const apiKey  = req.method === 'GET' ? req.query.apiKey  : req.body?.apiKey;
@@ -144,31 +138,38 @@ async function handleQuotes(req, res) {
   }
 
   const symbolList = String(symbols).split(',').map(s => s.trim()).filter(Boolean);
-
-  // Twelve Data /quote accepte plusieurs symboles séparés par des virgules en un seul appel
   const url = `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(symbolList.join(','))}&apikey=${apiKey}`;
 
-  const r = await fetch(url);
-  const data = await r.json();
+  try {
+    const r = await fetch(url);
+    const data = await r.json();
 
-  if (data?.status === 'error' || data?.code >= 400) {
-    return res.status(400).json({ error: data?.message || 'Erreur Twelve Data.' });
+    // Même en cas d'erreur globale d'API, on ne bloque pas si c'est une clé invalide
+    if (data?.code === 401 || data?.code === 429) {
+      return res.status(400).json({ error: data?.message || 'Clé Twelve Data invalide ou quota dépassé.' });
+    }
+
+    let normalized = [];
+    if (symbolList.length === 1) {
+      normalized = [normalizeQuote(symbolList[0], data)];
+    } else {
+      normalized = symbolList.map(sym => normalizeQuote(sym, data[sym] || {}));
+    }
+
+    return res.status(200).json({ quotes: normalized, fetched_at: new Date().toISOString() });
+  } catch (err) {
+    return res.status(500).json({ error: 'Erreur lors de la récupération des prix Twelve Data.' });
   }
-
-  // Normalise : Twelve Data renvoie un objet unique si 1 symbole, ou un objet {symbol: {...}} si plusieurs
-  let normalized = [];
-  if (symbolList.length === 1) {
-    normalized = [normalizeQuote(symbolList[0], data)];
-  } else {
-    normalized = symbolList.map(sym => normalizeQuote(sym, data[sym] || {}));
-  }
-
-  return res.status(200).json({ quotes: normalized, fetched_at: new Date().toISOString() });
 }
 
 function normalizeQuote(symbol, q) {
+  // Gestion tolérante : si le symbole échoue ou nécessite un plan payant (ex: DXY), on renvoie ok: false
   if (!q || q.status === 'error' || !q.close) {
-    return { symbol, ok: false, error: q?.message || 'Symbole indisponible sur ce plan Twelve Data.' };
+    return { 
+      symbol, 
+      ok: false, 
+      error: q?.message || 'Symbole indisponible sur ce plan Twelve Data.' 
+    };
   }
   const close = parseFloat(q.close);
   const prevClose = parseFloat(q.previous_close);
@@ -186,9 +187,7 @@ function normalizeQuote(symbol, q) {
 }
 
 /* =========================================================
-   ACTION: calendar  →  Finnhub (si clé fournie) sinon
-   repli gratuit automatique sur le flux public ForexFactory
-   GET /api/analyze?action=calendar&apiKey=... (apiKey optionnelle)
+   ACTION: calendar  →  Finnhub (si clé) sinon ForexFactory
    ========================================================= */
 async function handleCalendar(req, res) {
   const apiKey = req.method === 'GET' ? req.query.apiKey : req.body?.apiKey;
@@ -213,13 +212,11 @@ async function handleCalendar(req, res) {
         }));
         return res.status(200).json({ source: 'finnhub', events, fetched_at: new Date().toISOString() });
       }
-      // Si Finnhub répond mais sans accès (plan gratuit ne couvre pas cet endpoint), on tombe sur le fallback
     } catch (e) {
-      // idem : on tombe sur le fallback ci-dessous
+      // fallback ci-dessous
     }
   }
 
-  // Fallback gratuit, sans clé : flux JSON public ForexFactory
   try {
     const r = await fetch('https://nfs.faireconomy.media/ff_calendar_thisweek.json');
     const data = await r.json();
@@ -234,12 +231,11 @@ async function handleCalendar(req, res) {
     }));
     return res.status(200).json({ source: 'forexfactory_fallback', events, fetched_at: new Date().toISOString() });
   } catch (e) {
-    return res.status(502).json({ error: 'Impossible de récupérer le calendrier (Finnhub et fallback ForexFactory ont échoué).' });
+    return res.status(502).json({ error: 'Impossible de récupérer le calendrier.' });
   }
 }
 
 function mapFinnhubImpact(n) {
-  // Finnhub utilise une échelle numérique (0-3) selon les comptes ; normalisation prudente
   if (n === 3 || n === 'high') return 'high';
   if (n === 2 || n === 'medium') return 'medium';
   return 'low';
