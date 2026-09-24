@@ -1,0 +1,6 @@
+{
+  "name": "macroedge-relay",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Relais serverless vers l'API Anthropic pour MacroEdge AI (standalone)"
+}
