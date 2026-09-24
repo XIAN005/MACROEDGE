@@ -134,11 +134,10 @@ async function handleQuotes(req, res) {
   if (!apiKey) {
     return res.status(400).json({ error: 'Clé Alpha Vantage manquante (paramètre apiKey).' });
   }
-  if (!symbols) {
-    return res.status(400).json({ error: 'Paramètre "symbols" manquant (ex: EUR/USD,XAU/USD).' });
-  }
 
-  const symbolList = String(symbols).split(',').map(s => s.trim()).filter(Boolean);
+  // Si aucun symbole n'est spécifié, on prend des tickers de fallback
+  const rawSymbols = symbols || 'EUR/USD,USD/JPY,XAU/USD';
+  const symbolList = String(rawSymbols).split(',').map(s => s.trim()).filter(Boolean);
 
   try {
     const results = await Promise.all(symbolList.map(async (sym) => {
