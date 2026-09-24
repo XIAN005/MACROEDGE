@@ -1,8 +1,8 @@
 // api/analyze.js
 // Relais serverless (Vercel) — 3 fonctions dans un seul fichier :
-//  - action "chat"     : appel IA multi-provider (Anthropic / OpenAI / Gemini)
-//  - action "quotes"   : prix de marché live via Alpha Vantage (clé gratuite)
-//  - action "calendar" : calendrier économique — Finnhub si clé fournie, sinon repli
+//   - action "chat"     : appel IA multi-provider (Anthropic / OpenAI / Gemini)
+//   - action "quotes"   : prix de marché live via Alpha Vantage (clé gratuite)
+//   - action "calendar" : calendrier économique — Finnhub si clé fournie, sinon repli
 //                         automatique et gratuit sur le flux JSON public ForexFactory
 
 export default async function handler(req, res) {
@@ -19,7 +19,7 @@ export default async function handler(req, res) {
     if (action === 'quotes')   return await handleQuotes(req, res);
     if (action === 'calendar') return await handleCalendar(req, res);
 
-    return res.status(400).json({ error: 'action invalide. Attendu : chat, quotes ou calendar.' });
+    return res.status(400).json({ error: 'Action invalide. Attendu : chat, quotes ou calendar.' });
   } catch (err) {
     return res.status(500).json({ error: 'Erreur serveur relais : ' + (err?.message || String(err)) });
   }
@@ -30,7 +30,7 @@ export default async function handler(req, res) {
    ========================================================= */
 async function handleChat(req, res) {
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'chat nécessite POST.' });
+    return res.status(405).json({ error: 'La fonction chat nécessite la méthode POST.' });
   }
   const { provider, apiKey, system, messages, model } = req.body || {};
 
@@ -61,7 +61,7 @@ async function callAnthropic({ apiKey, system, messages, model, res }) {
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: model || 'claude-sonnet-4-5-20250929',
+      model: model || 'claude-3-5-sonnet-20241022',
       max_tokens: 1200,
       system: system || undefined,
       messages,
@@ -125,7 +125,7 @@ async function callGemini({ apiKey, system, messages, model, res }) {
 
 /* =========================================================
    ACTION: quotes  →  Alpha Vantage
-   GET  /api/analyze?action=quotes&apiKey=...&symbols=EUR/USD,XAU/USD
+   GET /api/analyze?action=quotes&apiKey=...&symbols=EUR/USD,XAU/USD
    ========================================================= */
 async function handleQuotes(req, res) {
   const apiKey  = req.method === 'GET' ? req.query.apiKey  : req.body?.apiKey;
@@ -230,12 +230,21 @@ async function handleCalendar(req, res) {
         return res.status(200).json({ source: 'finnhub', events, fetched_at: new Date().toISOString() });
       }
     } catch (e) {
-      // repli automatique
+      // Repli automatique en cas d'erreur de la clé Finnhub
     }
   }
 
   try {
-    const r = await fetch('https://nfs.faireconomy.media/ff_calendar_thisweek.json');
+    // Ajout d'un User-Agent pour éviter le blocage HTTP 403 / Cloudflare par ForexFactory
+    const r = await fetch('https://nfs.faireconomy.media/ff_calendar_thisweek.json', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json'
+      }
+    });
+
+    if (!r.ok) throw new Error(`Réponse statut ${r.status}`);
+
     const data = await r.json();
     const events = (Array.isArray(data) ? data : []).map(e => ({
       datetime: e.date || null,
@@ -246,9 +255,10 @@ async function handleCalendar(req, res) {
       forecast: e.forecast || null,
       previous: e.previous || null,
     }));
+
     return res.status(200).json({ source: 'forexfactory_fallback', events, fetched_at: new Date().toISOString() });
   } catch (e) {
-    return res.status(502).json({ error: 'Impossible de récupérer le calendrier.' });
+    return res.status(502).json({ error: 'Impossible de récupérer le calendrier économique : ' + e.message });
   }
 }
 
