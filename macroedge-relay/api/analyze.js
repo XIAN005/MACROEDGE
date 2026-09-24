@@ -124,70 +124,73 @@ async function callGemini({ apiKey, system, messages, model, res }) {
 }
 
 /* =========================================================
-   ACTION: quotes  →  Finnhub
+   ACTION: quotes  →  Alpha Vantage (CURRENCY_EXCHANGE_RATE)
    GET /api/analyze?action=quotes&apiKey=...&symbols=USD/JPY,EUR/USD,XAU/USD
+   Note : le plan gratuit Alpha Vantage est limité à 25 requêtes/jour et
+   5/minute. Chaque symbole demandé consomme 1 requête.
    ========================================================= */
 async function handleQuotes(req, res) {
-  const apiKey  = (req.method === 'GET' ? req.query.apiKey : req.body?.apiKey) || process.env.FINNHUB_API_KEY;
+  const apiKey  = (req.method === 'GET' ? req.query.apiKey : req.body?.apiKey) || process.env.ALPHAVANTAGE_API_KEY;
   const symbols = req.method === 'GET' ? req.query.symbols : req.body?.symbols;
 
   if (!apiKey) {
-    return res.status(400).json({ error: 'Clé Finnhub manquante (paramètre apiKey ou variable d\'environnement FINNHUB_API_KEY).' });
+    return res.status(400).json({ error: 'Clé Alpha Vantage manquante (paramètre apiKey ou variable d\'environnement ALPHAVANTAGE_API_KEY).' });
   }
 
   // Tickers de fallback si non spécifiés
   const rawSymbols = symbols || 'USD/JPY,EUR/USD,XAU/USD';
   const symbolList = String(rawSymbols).split(',').map(s => s.trim()).filter(Boolean);
 
-  // Table de correspondance pour le provider OANDA de Finnhub
-  const symbolMap = {
-    'EUR/USD': 'OANDA:EUR_USD',
-    'USD/JPY': 'OANDA:USD_JPY',
-    'XAU/USD': 'OANDA:XAU_USD',
-    'EURUSD': 'OANDA:EUR_USD',
-    'USDJPY': 'OANDA:USD_JPY',
-    'XAUUSD': 'OANDA:XAU_USD'
-  };
-
   try {
-    const results = await Promise.all(symbolList.map(async (displaySymbol) => {
-      const finnhubSymbol = symbolMap[displaySymbol] || displaySymbol;
-      const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(finnhubSymbol)}&token=${apiKey}`;
+    const results = [];
+    // Séquentiel plutôt que Promise.all : Alpha Vantage free tier limite à 5 req/min,
+    // des appels en parallèle risquent de déclencher la limite de fréquence.
+    for (const displaySymbol of symbolList) {
+      const [fromCcy, toCcy] = displaySymbol.replace('/', '').match(/.{1,3}/g) || [];
+      if (!fromCcy || !toCcy) {
+        results.push({ symbol: displaySymbol, ok: false, error: 'Format de symbole invalide (attendu ex: EUR/USD).' });
+        continue;
+      }
 
+      const url = `https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=${encodeURIComponent(fromCcy)}&to_currency=${encodeURIComponent(toCcy)}&apikey=${apiKey}`;
       const r = await fetch(url);
+
       if (!r.ok) {
-        return { symbol: displaySymbol, ok: false, error: `Erreur HTTP ${r.status}` };
+        results.push({ symbol: displaySymbol, ok: false, error: `Erreur HTTP ${r.status}` });
+        continue;
       }
 
       const data = await r.json();
 
-      // Finnhub retourne c (current), d (change), dp (percent change), pc (previous close)
-      if (data && typeof data.c === 'number' && data.c !== 0) {
-        const percentChange = data.dp ? parseFloat(data.dp.toFixed(2)) : 0;
-        const change = data.d ? parseFloat(data.d.toFixed(4)) : 0;
-
-        return {
-          symbol: displaySymbol,
-          ok: true,
-          price: data.c,
-          change: change,
-          percent_change: percentChange,
-          change_percent: percentChange, // Alias de compatibilité
-          previous_close: data.pc || null,
-          datetime: new Date().toISOString()
-        };
+      if (data.Note || data.Information) {
+        results.push({ symbol: displaySymbol, ok: false, error: "Limite d'appels Alpha Vantage atteinte (25/jour ou 5/min max)." });
+        continue;
       }
 
-      return {
-        symbol: displaySymbol,
-        ok: false,
-        error: 'Symbole non trouvé ou limite d\'appels atteinte.'
-      };
-    }));
+      const rate = data?.['Realtime Currency Exchange Rate'];
+      const price = rate?.['5. Exchange Rate'] ? parseFloat(rate['5. Exchange Rate']) : null;
+
+      if (price) {
+        results.push({
+          symbol: displaySymbol,
+          ok: true,
+          price,
+          // Alpha Vantage CURRENCY_EXCHANGE_RATE ne fournit pas de variation
+          // journalière : on renvoie 0 plutôt que d'inventer un chiffre.
+          change: 0,
+          percent_change: 0,
+          change_percent: 0,
+          previous_close: null,
+          datetime: rate?.['6. Last Refreshed'] || new Date().toISOString()
+        });
+      } else {
+        results.push({ symbol: displaySymbol, ok: false, error: 'Symbole non trouvé ou réponse inattendue.' });
+      }
+    }
 
     return res.status(200).json({ quotes: results, fetched_at: new Date().toISOString() });
   } catch (err) {
-    return res.status(500).json({ error: 'Erreur lors de la récupération des prix Finnhub : ' + err.message });
+    return res.status(500).json({ error: 'Erreur lors de la récupération des prix Alpha Vantage : ' + err.message });
   }
 }
 
