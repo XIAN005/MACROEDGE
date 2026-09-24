@@ -1,7 +1,7 @@
 // api/analyze.js
 // Relais serverless (Vercel) — 3 fonctions dans un seul fichier :
 //   - action "chat"     : appel IA multi-provider (Anthropic / OpenAI / Gemini)
-//   - action "quotes"   : prix de marché live via Alpha Vantage (clé gratuite)
+//   - action "quotes"   : prix de marché live via Finnhub (Forex & Or)
 //   - action "calendar" : calendrier économique — Finnhub si clé fournie, sinon repli
 //                         automatique et gratuit sur le flux JSON public ForexFactory
 
@@ -124,89 +124,78 @@ async function callGemini({ apiKey, system, messages, model, res }) {
 }
 
 /* =========================================================
-   ACTION: quotes  →  Alpha Vantage
-   GET /api/analyze?action=quotes&apiKey=...&symbols=EUR/USD,XAU/USD
+   ACTION: quotes  →  Finnhub
+   GET /api/analyze?action=quotes&apiKey=...&symbols=USD/JPY,EUR/USD,XAU/USD
    ========================================================= */
 async function handleQuotes(req, res) {
-  const apiKey  = req.method === 'GET' ? req.query.apiKey  : req.body?.apiKey;
+  const apiKey  = (req.method === 'GET' ? req.query.apiKey : req.body?.apiKey) || process.env.FINNHUB_API_KEY;
   const symbols = req.method === 'GET' ? req.query.symbols : req.body?.symbols;
 
   if (!apiKey) {
-    return res.status(400).json({ error: 'Clé Alpha Vantage manquante (paramètre apiKey).' });
+    return res.status(400).json({ error: 'Clé Finnhub manquante (paramètre apiKey ou variable d\'environnement FINNHUB_API_KEY).' });
   }
 
-  // Si aucun symbole n'est spécifié, on prend des tickers de fallback
-  const rawSymbols = symbols || 'EUR/USD,USD/JPY,XAU/USD';
+  // Tickers de fallback si non spécifiés
+  const rawSymbols = symbols || 'USD/JPY,EUR/USD,XAU/USD';
   const symbolList = String(rawSymbols).split(',').map(s => s.trim()).filter(Boolean);
 
+  // Table de correspondance pour le provider OANDA de Finnhub
+  const symbolMap = {
+    'EUR/USD': 'OANDA:EUR_USD',
+    'USD/JPY': 'OANDA:USD_JPY',
+    'XAU/USD': 'OANDA:XAU_USD',
+    'EURUSD': 'OANDA:EUR_USD',
+    'USDJPY': 'OANDA:USD_JPY',
+    'XAUUSD': 'OANDA:XAU_USD'
+  };
+
   try {
-    const results = await Promise.all(symbolList.map(async (sym) => {
-      let url = '';
-      if (sym.includes('/')) {
-        const [from, to] = sym.split('/');
-        url = `https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=${encodeURIComponent(from)}&to_currency=${encodeURIComponent(to)}&apikey=${apiKey}`;
-      } else {
-        url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${encodeURIComponent(sym)}&apikey=${apiKey}`;
-      }
+    const results = await Promise.all(symbolList.map(async (displaySymbol) => {
+      const finnhubSymbol = symbolMap[displaySymbol] || displaySymbol;
+      const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(finnhubSymbol)}&token=${apiKey}`;
 
       const r = await fetch(url);
+      if (!r.ok) {
+        return { symbol: displaySymbol, ok: false, error: `Erreur HTTP ${r.status}` };
+      }
+
       const data = await r.json();
-      return normalizeAlphaVantageQuote(sym, data);
+
+      // Finnhub retourne c (current), d (change), dp (percent change), pc (previous close)
+      if (data && typeof data.c === 'number' && data.c !== 0) {
+        const percentChange = data.dp ? parseFloat(data.dp.toFixed(2)) : 0;
+        const change = data.d ? parseFloat(data.d.toFixed(4)) : 0;
+
+        return {
+          symbol: displaySymbol,
+          ok: true,
+          price: data.c,
+          change: change,
+          percent_change: percentChange,
+          change_percent: percentChange, // Alias de compatibilité
+          previous_close: data.pc || null,
+          datetime: new Date().toISOString()
+        };
+      }
+
+      return {
+        symbol: displaySymbol,
+        ok: false,
+        error: 'Symbole non trouvé ou limite d\'appels atteinte.'
+      };
     }));
 
     return res.status(200).json({ quotes: results, fetched_at: new Date().toISOString() });
   } catch (err) {
-    return res.status(500).json({ error: 'Erreur lors de la récupération des prix Alpha Vantage : ' + err.message });
+    return res.status(500).json({ error: 'Erreur lors de la récupération des prix Finnhub : ' + err.message });
   }
-}
-
-function normalizeAlphaVantageQuote(symbol, data) {
-  // Traitement pour les devises & forex (CURRENCY_EXCHANGE_RATE)
-  if (data['Realtime Currency Exchange Rate']) {
-    const rate = data['Realtime Currency Exchange Rate'];
-    const price = parseFloat(rate['5. Exchange Rate']);
-    return {
-      symbol,
-      ok: true,
-      price: price,
-      change: 0,
-      percent_change: 0,
-      previous_close: null,
-      datetime: rate['6. Last Refreshed'] || null,
-    };
-  }
-
-  // Traitement pour les autres actifs (GLOBAL_QUOTE)
-  if (data['Global Quote'] && data['Global Quote']['05. price']) {
-    const quote = data['Global Quote'];
-    const price = parseFloat(quote['05. price']);
-    const change = parseFloat(quote['09. change'] || 0);
-    const percentStr = quote['10. change percent'] || '0%';
-    const percent = parseFloat(percentStr.replace('%', ''));
-
-    return {
-      symbol,
-      ok: true,
-      price: price,
-      change: change,
-      percent_change: percent,
-      previous_close: parseFloat(quote['08. previous close'] || 0) || null,
-      datetime: quote['07. latest trading day'] || null,
-    };
-  }
-
-  return { 
-    symbol, 
-    ok: false, 
-    error: data['Note'] || data['Information'] || 'Symbole indisponible ou limite de requêtes atteinte.' 
-  };
 }
 
 /* =========================================================
    ACTION: calendar  →  Finnhub (si clé) sinon ForexFactory
    ========================================================= */
 async function handleCalendar(req, res) {
-  const apiKey = req.method === 'GET' ? req.query.apiKey : req.body?.apiKey;
+  const apiKey = (req.method === 'GET' ? req.query.apiKey : req.body?.apiKey) || process.env.FINNHUB_API_KEY;
 
   if (apiKey) {
     try {
