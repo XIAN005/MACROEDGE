@@ -1,7 +1,7 @@
 // api/analyze.js
 // Relais serverless (Vercel) — 3 fonctions dans un seul fichier :
 //   - action "chat"     : appel IA multi-provider (Anthropic / OpenAI / Gemini)
-//   - action "quotes"   : prix de marché live via Finnhub (Forex & Or)
+//   - action "quotes"   : prix de marché live via Alpha Vantage (Forex & Or)
 //   - action "calendar" : calendrier économique — Finnhub si clé fournie, sinon repli
 //                         automatique et gratuit sur le flux JSON public ForexFactory
 
@@ -61,7 +61,7 @@ async function callAnthropic({ apiKey, system, messages, model, res }) {
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: model || 'claude-3-5-sonnet-20241022',
+      model: model || 'claude-sonnet-5-5',
       max_tokens: 1200,
       system: system || undefined,
       messages,
@@ -88,7 +88,7 @@ async function callOpenAI({ apiKey, system, messages, model, res }) {
     },
     body: JSON.stringify({
       model: model || 'gpt-4o',
-      max_tokens: 1200,
+      max_completion_tokens: 1200,
       messages: oaMessages,
     }),
   });
@@ -101,18 +101,18 @@ async function callOpenAI({ apiKey, system, messages, model, res }) {
 }
 
 async function callGemini({ apiKey, system, messages, model, res }) {
-  const mdl = model || 'gemini-2.0-flash';
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${mdl}:generateContent?key=${apiKey}`;
+  const mdl = model || 'gemini-2.5-flash';
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(mdl)}:generateContent`;
   const contents = messages.map(m => ({
     role: m.role === 'assistant' ? 'model' : 'user',
     parts: [{ text: m.content }],
   }));
-  const body = { contents };
+  const body = { contents, generationConfig: { maxOutputTokens: 1200 } };
   if (system) body.system_instruction = { parts: [{ text: system }] };
 
   const r = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
     body: JSON.stringify(body),
   });
   const data = await r.json();
@@ -139,14 +139,15 @@ async function handleQuotes(req, res) {
 
   // Tickers de fallback si non spécifiés
   const rawSymbols = symbols || 'USD/JPY,EUR/USD,XAU/USD';
-  const symbolList = String(rawSymbols).split(',').map(s => s.trim()).filter(Boolean);
+  const symbolList = String(rawSymbols).split(',').map(s => s.trim()).filter(Boolean).slice(0, 6);
 
   try {
     const results = [];
     // Séquentiel plutôt que Promise.all : Alpha Vantage free tier limite à 5 req/min,
     // des appels en parallèle risquent de déclencher la limite de fréquence.
     for (const displaySymbol of symbolList) {
-      const [fromCcy, toCcy] = displaySymbol.replace('/', '').match(/.{1,3}/g) || [];
+      const m = /^([A-Za-z]{3})\/?([A-Za-z]{3})$/.exec(displaySymbol);
+      const [fromCcy, toCcy] = m ? [m[1].toUpperCase(), m[2].toUpperCase()] : [];
       if (!fromCcy || !toCcy) {
         results.push({ symbol: displaySymbol, ok: false, error: 'Format de symbole invalide (attendu ex: EUR/USD).' });
         continue;
@@ -198,6 +199,7 @@ async function handleQuotes(req, res) {
    ACTION: calendar  →  Finnhub (si clé) sinon ForexFactory
    ========================================================= */
 async function handleCalendar(req, res) {
+  res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=600');
   const apiKey = (req.method === 'GET' ? req.query.apiKey : req.body?.apiKey) || process.env.FINNHUB_API_KEY;
 
   if (apiKey) {
@@ -210,7 +212,7 @@ async function handleCalendar(req, res) {
 
       if (r.ok && Array.isArray(data?.economicCalendar)) {
         const events = data.economicCalendar.map(e => ({
-          datetime: e.time || null,
+          datetime: finnhubTime(e.time),
           country: e.country || '',
           event: e.event || '',
           impact: mapFinnhubImpact(e.impact),
@@ -251,6 +253,13 @@ async function handleCalendar(req, res) {
   } catch (e) {
     return res.status(502).json({ error: 'Impossible de récupérer le calendrier économique : ' + e.message });
   }
+}
+
+// Finnhub renvoie "YYYY-MM-DD HH:MM:SS" en UTC, sans fuseau : on le rend explicite.
+function finnhubTime(t) {
+  if (!t) return null;
+  const d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(t) ? t : String(t).replace(' ', 'T') + 'Z');
+  return isNaN(d) ? null : d.toISOString();
 }
 
 function mapFinnhubImpact(n) {
