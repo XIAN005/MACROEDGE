@@ -1,6 +1,8 @@
 {
   "name": "macroedge-relay",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
-  "description": "Relais serverless vers l'API Anthropic pour MacroEdge AI (standalone)"
+  "type": "module",
+  "description": "Relais serverless (Anthropic / OpenAI / Gemini + Alpha Vantage + calendrier) pour MacroEdge AI",
+  "engines": { "node": "22.x" }
 }
