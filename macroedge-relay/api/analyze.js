@@ -212,7 +212,7 @@ async function gemini(model, key, system, prompt, extra = '') {
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: system + extra }] },
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 4096, temperature: 0.3, thinkingConfig: { thinkingBudget: 1024 } }
+      generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 4096, ...(/^gemini-3/.test(model) ? { thinkingConfig: { thinkingLevel: 'low' } } : { temperature: 0.3, thinkingConfig: { thinkingBudget: 1024 } }) }
     })
   });
   const tx = await r.text(); let j; try { j = JSON.parse(tx); } catch { throw E(`réponse Gemini non-JSON (HTTP ${r.status})`, r.status, 'gemini'); }
@@ -228,7 +228,7 @@ async function gemini(model, key, system, prompt, extra = '') {
   return text;
 }
 async function chat(body, keys) {
-  const { system = '', prompt = '', model = 'gemini-2.5-flash', fallbackModels = ['gemini-2.5-flash-lite', 'gemini-2.5-pro'], shortPrompt } = body;
+  const { system = '', prompt = '', model = 'gemini-3.8-flash', fallbackModels = ['gemini-3.7-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview'], shortPrompt } = body;
   const ks = [keys.gemini, body.keys?.gemini2].filter(Boolean);
   if (!ks.length) throw E('clé Gemini absente (Réglages ou GEMINI_API_KEY)', 401, 'gemini');
   const tried = [];
