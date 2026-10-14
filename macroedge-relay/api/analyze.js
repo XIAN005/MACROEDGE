@@ -28,12 +28,12 @@ async function hfetch(url, opt = {}) {
 async function jget(url, opt, src) {
   const r = await hfetch(url, opt), tx = await r.text();
   let j; try { j = JSON.parse(tx); } catch { throw E(`réponse non-JSON (HTTP ${r.status})`, r.status, src); }
-  if (!r.ok) throw E(`HTTP ${r.status}`, r.status, src, r.status === 429);
+  if (!r.ok) throw E(`HTTP ${r.status}`, r.status, src, false);
   return j;
 }
 async function tget(url, opt, src) {
   const r = await hfetch(url, opt);
-  if (!r.ok) throw E(`HTTP ${r.status}`, r.status, src, r.status === 429);
+  if (!r.ok) throw E(`HTTP ${r.status}`, r.status, src, false);
   return r.text();
 }
 const fail = (q, n) => (q.debug_fail || '').split(',').includes(n);
@@ -57,7 +57,7 @@ const H = {
     if (!k) throw E('clé manquante', 401, 'twelvedata');
     if (fail(q, 'twelvedata')) throw E('panne simulée', 503, 'twelvedata');
     const j = await jget(`https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(sym)}&interval=1day&outputsize=120&apikey=${k}`, {}, 'twelvedata');
-    if (j.status === 'error') throw E(j.message || 'erreur Twelve Data', j.code || 400, 'twelvedata', j.code === 429);
+    if (j.status === 'error') throw E(j.message || 'erreur Twelve Data', j.code || 400, 'twelvedata', j.code === 429 && /day/i.test(j.message || ''));
     return j.values.map(v => ({ date: v.datetime.slice(0, 10), open: num(v.open), high: num(v.high), low: num(v.low), close: num(v.close) })).reverse();
   },
   async alphavantage(sym, k, q) {
@@ -75,7 +75,7 @@ const H = {
     const [f, t] = sym.split('/');
     if (f === 'XAU' || t === 'XAU') throw E("pas d'or chez Frankfurter", 422, 'frankfurter');
     const start = new Date(Date.now() - 190 * 864e5).toISOString().slice(0, 10);
-    const j = await jget(`https://api.frankfurter.app/${start}..?from=${f}&to=${t}`, {}, 'frankfurter');
+    const j = await jget(`https://api.frankfurter.dev/v1/${start}..?base=${f}&symbols=${t}`, {}, 'frankfurter');
     if (!j.rates) throw E('structure inattendue', 422, 'frankfurter');
     return Object.keys(j.rates).sort().map(d => { const p = num(j.rates[d][t]); return { date: d, open: p, high: p, low: p, close: p }; });
   },
@@ -292,7 +292,7 @@ export default async function handler(req, res) {
       }
       case 'test': {
         const what = q.what || 'all', out = {};
-        const run = async (n, fn) => { const t = Date.now(); try { out[n] = { ok: true, detail: await fn(), ms: Date.now() - t }; } catch (e) { out[n] = { ok: false, error: e.message, ms: Date.now() - t }; } };
+        const run = async (n, fn) => { const t = Date.now(); try { out[n] = { ok: true, detail: await fn(), ms: Date.now() - t }; } catch (e) { out[n] = { ok: false, error: e.message + (e.tried?.length ? ' — ' + e.tried.map(x => x.model + ' : ' + x.error).join(' | ') : ''), ms: Date.now() - t }; } };
         if (what === 'all' || what === 'gemini') await run('gemini', async () => (await chat({ system: 'Réponds en JSON.', prompt: '{"ping":"ok"} : renvoie {"pong":true}', fallbackModels: [] }, keys)).model);
         if (what === 'all' || what === 'twelvedata') await run('twelvedata', async () => (await getQuote('EUR/USD', { twelvedata: keys.twelvedata }, q)).price);
         if (what === 'all' || what === 'alphavantage') await run('alphavantage', async () => (await getQuote('EUR/USD', { alphavantage: keys.alphavantage }, q)).price);
