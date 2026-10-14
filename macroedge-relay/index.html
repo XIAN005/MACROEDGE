@@ -1,0 +1,752 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MacroEdge Desk</title>
+<style>
+:root{--bg:#0f1420;--card:#171e2e;--bd:#27314a;--tx:#e6eaf4;--mu:#8b97b3;--ac:#4f8cff;--up:#22c58b;--dn:#ef5b5b;--wa:#f0a030}
+:root[data-theme=light]{--bg:#f3f5fa;--card:#fff;--bd:#d8deeb;--tx:#1a2236;--mu:#5d6985;--ac:#2563eb;--up:#0f9d6b;--dn:#d63b3b;--wa:#c57a0a}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;min-height:100vh}
+#top{position:sticky;top:0;z-index:20;min-height:52px;background:var(--card);border-bottom:1px solid var(--bd);display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:6px 12px}
+#top h1{font-size:16px;margin:0 8px 0 0}
+.tabs{display:flex;flex-wrap:wrap;gap:4px;flex:1}
+.tabs button,.btn{background:transparent;color:var(--tx);border:1px solid var(--bd);border-radius:8px;padding:6px 12px;cursor:pointer;font:inherit}
+.tabs button.on,.btn.pri{background:var(--ac);border-color:var(--ac);color:#fff}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+main{padding:12px;max-width:1300px;margin:auto}
+section.tab{display:none}section.tab.on{display:block}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:12px;margin-bottom:12px}
+.grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
+.tbl{width:100%;border-collapse:collapse}.tbl th,.tbl td{padding:6px 8px;border-bottom:1px solid var(--bd);text-align:left;white-space:nowrap}
+.scroll{overflow-x:auto;max-width:100%}
+.badge{display:inline-block;font-size:11px;padding:1px 7px;border-radius:99px;border:1px solid var(--bd);color:var(--mu);margin-left:4px}
+.badge.stale{color:var(--wa);border-color:var(--wa)}.badge.na{color:var(--dn);border-color:var(--dn)}
+.up{color:var(--up)}.dn{color:var(--dn)}.mu{color:var(--mu)}
+input,select,textarea{background:var(--bg);color:var(--tx);border:1px solid var(--bd);border-radius:8px;padding:6px 8px;font:inherit;max-width:100%}
+.bar{height:8px;background:var(--bd);border-radius:4px;overflow:hidden}.bar>i{display:block;height:100%;background:var(--ac)}
+#toast{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);z-index:50;display:flex;flex-direction:column;gap:6px}
+#toast div{background:var(--card);border:1px solid var(--wa);padding:8px 14px;border-radius:8px}
+#modal{position:fixed;inset:0;background:#0009;display:none;align-items:center;justify-content:center;z-index:40;padding:12px}
+#modal.on{display:flex}#modal .box{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:16px;max-width:640px;width:100%;max-height:85vh;overflow:auto}
+.warn{font-size:12px;color:var(--mu);margin:8px 0}
+@media(max-width:600px){main{padding:8px}.tabs button{padding:5px 8px}}
+</style>
+</head>
+<body>
+<header id="top">
+  <h1>MacroEdge Desk</h1>
+  <nav class="tabs" id="tabs">
+    <button data-tab="dashboard" class="on">Dashboard</button><button data-tab="deep">Analyse approfondie</button>
+    <button data-tab="news">News</button><button data-tab="gen">Générateur</button>
+    <button data-tab="journal">Journal</button><button data-tab="settings">Réglages</button>
+  </nav>
+  <button class="btn" id="themeBtn" title="Thème">◐</button>
+</header>
+<main>
+  <div class="warn" id="disclaimer">Aide à l'analyse, pas un conseil en investissement. Les scores sont un modèle heuristique.</div>
+  <section class="tab on" id="tab-dashboard"><div id="dash"></div></section>
+  <section class="tab" id="tab-deep"><div id="deepView"></div></section>
+  <section class="tab" id="tab-news"><div id="newsView"></div></section>
+  <section class="tab" id="tab-gen"><div id="genView"></div></section>
+  <section class="tab" id="tab-journal"><div id="journalView"></div></section>
+  <section class="tab" id="tab-settings"><div id="settingsView"></div></section>
+</main>
+<div id="toast"></div>
+<div id="modal"><div class="box" id="modalBox"></div></div>
+
+<script>
+'use strict';
+/* ================= PARTIE 1/4 : SOCLE ================= */
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const safeUrl = u => /^https:\/\//i.test(u || '') ? esc(u) : '';
+const fmtTime = iso => { const d = new Date(iso); return isNaN(d) ? '—' : d.toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); };
+const ageMin = iso => Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 6e4));
+const ageTxt = m => m < 60 ? m + ' min' : m < 2880 ? Math.round(m / 60) + ' h' : Math.round(m / 1440) + ' j';
+const utcDay = () => new Date().toISOString().slice(0, 10);
+const toNum = v => { if (typeof v === 'number') return v; const n = parseFloat(String(v ?? '').trim().replace(/\s/g, '').replace(',', '.')); return isNaN(n) ? null : n; };
+
+function toast(msg, ms = 5000) { const d = document.createElement('div'); d.textContent = msg; $('#toast').append(d); setTimeout(() => d.remove(), ms); }
+function openModal(html) { $('#modalBox').innerHTML = html; $('#modal').classList.add('on'); }
+function closeModal() { $('#modal').classList.remove('on'); }
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+$('#modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
+async function copyText(t) {
+  try { await navigator.clipboard.writeText(t); toast('Copié.'); }
+  catch { openModal(`<p>Presse-papiers indisponible : copie manuellement.</p><textarea style="width:100%;height:260px" readonly>${esc(t)}</textarea>`); }
+}
+
+/* ---- stockage : localStorage, sinon mémoire de session + avertissement ---- */
+const MEM = {}; let storageWarned = false;
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('me_' + k); if (v != null) return JSON.parse(v); } catch {} return k in MEM ? MEM[k] : d; },
+  set(k, v) { MEM[k] = v; try { localStorage.setItem('me_' + k, JSON.stringify(v)); } catch { if (!storageWarned) { storageWarned = true; toast('Stockage local plein ou bloqué : données gardées en mémoire pour cette session seulement.'); } } },
+  del(k) { delete MEM[k]; try { localStorage.removeItem('me_' + k); } catch {} },
+  clearAll() { Object.keys(MEM).forEach(k => delete MEM[k]); try { Object.keys(localStorage).filter(k => k.startsWith('me_')).forEach(k => localStorage.removeItem(k)); } catch {} }
+};
+
+/* ---- réglages ---- */
+const PAIRS = ['EUR/USD', 'GBP/USD', 'USD/JPY', 'USD/CHF', 'AUD/USD', 'USD/CAD', 'NZD/USD', 'XAU/USD'];
+const DEFAULTS = {
+  keys: { gemini: '', gemini2: '', twelvedata: '', alphavantage: '', finnhub: '' },
+  model: 'gemini-2.5-flash', relays: [], primary: 'auto',
+  order: { history: ['twelvedata', 'alphavantage', 'frankfurter', 'stooq'], calendar: ['finnhub', 'forexfactory'], news: ['finnhub', 'rss', 'alphavantage'] },
+  disabled: {}, active: Object.fromEntries(PAIRS.map(p => [p, true])),
+  weights: { policy: 30, momentum: 30, structure: 15, risk: 10, news: 15 },
+  rates: {}, demo: false, avNews: false, theme: 'dark'
+};
+function getSettings() { const s = store.get('settings', {}); return { ...DEFAULTS, ...s, keys: { ...DEFAULTS.keys, ...s.keys }, order: { ...DEFAULTS.order, ...s.order }, weights: { ...DEFAULTS.weights, ...s.weights }, active: { ...DEFAULTS.active, ...s.active } }; }
+function saveSettings(s) { store.set('settings', s); }
+function applyTheme() { document.documentElement.dataset.theme = getSettings().theme; }
+$('#themeBtn').onclick = () => { const s = getSettings(); s.theme = s.theme === 'dark' ? 'light' : 'dark'; saveSettings(s); applyTheme(); };
+applyTheme();
+
+/* ---- relais : URL normalisée, liste avec bascule, erreurs explicites ---- */
+function normRelay(u) {
+  u = (u || '').trim(); if (!u) return '';
+  if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
+  u = u.replace(/\/+$/, '');
+  return /\/api\/analyze$/.test(u) ? u : u + '/api/analyze';
+}
+function relayList() {
+  const s = getSettings(); let l = s.relays.map(normRelay).filter(Boolean);
+  if (!l.length && /\.vercel\.app$/.test(location.hostname)) l = [location.origin + '/api/analyze']; // pré-rempli seulement sur *.vercel.app
+  return l;
+}
+async function relayOne(url, action, params, body, keys) {
+  const qs = new URLSearchParams({ action, ...params }).toString();
+  const headers = {}; if (keys) for (const [k, v] of Object.entries(keys)) if (v && k !== 'gemini2') headers['x-' + k + '-key'] = v;
+  const ac = new AbortController(), t = setTimeout(() => ac.abort(), 33000);
+  let r, tx;
+  try {
+    r = await fetch(url + '?' + qs, body ? { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: ac.signal } : { headers, signal: ac.signal });
+    tx = await r.text();
+  } catch (e) { throw Object.assign(new Error(e.name === 'AbortError' ? 'Le relais ne répond pas (timeout).' : 'Relais injoignable (réseau ou CORS).'), { unreachable: true }); }
+  finally { clearTimeout(t); }
+  let j; try { j = JSON.parse(tx); } catch {
+    throw Object.assign(new Error(/^\s*</.test(tx) ? `Le relais a renvoyé une page HTML (HTTP ${r.status}) : vérifie l'URL et que /api/analyze est déployé.` : `Le relais a renvoyé une réponse non-JSON (HTTP ${r.status}).`), { unreachable: true });
+  }
+  if (j && j.error && !r.ok) throw Object.assign(new Error(j.error), { source: j.source, attempts: j.attempts, tried: j.tried, status: r.status });
+  return j;
+}
+async function relay(action, params = {}, body = null) {
+  const s = getSettings(), urls = relayList();
+  if (!urls.length) throw Object.assign(new Error('Aucun relais configuré (Réglages → Relais).'), { unreachable: true });
+  const keys = { ...s.keys }, b = body ? { ...body, keys: { gemini2: s.keys.gemini2 } } : null;
+  let last;
+  for (const u of urls) {
+    try { return await relayOne(u, action, params, b, keys); }
+    catch (e) { last = e; if (!e.unreachable) throw e; } // bascule sur le relais suivant seulement si injoignable / non-JSON
+  }
+  throw last;
+}
+
+/* ---- disjoncteur + santé + quotas (persistés) ---- */
+const RSS_NAMES = ['Fed', 'BCE', 'BoE', 'BoJ', 'FXStreet'];
+const Health = {
+  all() { return store.get('health', {}); },
+  get(n) { const h = this.all(); const x = h[n] || { fails: 0, until: 0, quotaDay: null, lastOk: null, lastErr: null, req: {} }; return x; },
+  put(n, x) { const h = this.all(); h[n] = x; store.set('health', h); },
+  blocked(n) { const x = this.get(n); return x.quotaDay === utcDay() ? 'quota épuisé' : x.until > Date.now() ? 'en pause jusqu\'à ' + new Date(x.until).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : null; },
+  ok(n) { const x = this.get(n); x.fails = 0; x.until = 0; x.lastOk = new Date().toISOString(); this.put(n, x); },
+  fail(n, msg, quota) { const x = this.get(n); x.lastErr = { msg, at: new Date().toISOString() }; if (quota) x.quotaDay = utcDay(); else if (++x.fails >= 2) x.until = Date.now() + (RSS_NAMES.includes(n) ? 5 : 10) * 6e4; this.put(n, x); },
+  bump(n) { const x = this.get(n), d = utcDay(); x.req = x.req || {}; x.req[d] = (x.req[d] || 0) + 1; Object.keys(x.req).filter(k => k !== d).forEach(k => delete x.req[k]); this.put(n, x); },
+  today(n) { return (this.get(n).req || {})[utcDay()] || 0; },
+  reset(n) { const h = this.all(); if (h[n]) { h[n].fails = 0; h[n].until = 0; h[n].quotaDay = null; store.set('health', h); } },
+  state(n) { const b = this.blocked(n), x = this.get(n); return b ? b : x.fails ? 'dégradé' : x.lastOk ? 'OK' : 'non testé'; }
+};
+const DAILY_LIMIT = { twelvedata: 800, alphavantage: 25, finnhub: 3600 };
+function absorbAttempts(resp) { // met à jour santé/quotas à partir des tentatives renvoyées par le relais
+  (resp?.attempts || []).forEach(a => { if (a.error === 'clé absente') return; Health.bump(a.source.split('_')[0]); Health.fail(a.source.split('_')[0], a.error, a.quota); });
+  if (resp?.source) { const n = resp.source.split(/[_ ]/)[0]; Health.bump(n); Health.ok(n); }
+}
+
+/* ---- validation côté client (même règles que le relais) ---- */
+function validateCandles(c) {
+  if (!Array.isArray(c) || c.length < 100) throw new Error('moins de 100 bougies');
+  c.forEach((b, i) => {
+    if (![b.open, b.high, b.low, b.close].every(v => Number.isFinite(v) && v > 0)) throw new Error('prix invalide');
+    if (i && !(b.date > c[i - 1].date)) throw new Error('dates non croissantes');
+    if (i && Math.abs(b.close / c[i - 1].close - 1) > 0.08) throw new Error('variation aberrante');
+  });
+  return c;
+}
+const withMeta = (d, stale) => ({ ...d, stale: !!stale, age_minutes: ageMin(d.fetched_at) });
+
+/* ---- historique : relais → Frankfurter direct → cache périmé (7 j) → N/A ---- */
+async function fetchHistory(sym, { force = false } = {}) {
+  const ck = 'hist_' + sym, cached = store.get(ck, null), TTL = 12 * 6e4 * 60;
+  if (cached && !force && Date.now() - Date.parse(cached.fetched_at) < TTL) return withMeta(cached, false);
+  const s = getSettings(), off = new Set([...(s.disabled.history || []), ...s.order.history.filter(n => Health.blocked(n))]);
+  let order = s.order.history.filter(n => !off.has(n));
+  if (s.primary === 'twelvedata') order = ['twelvedata', ...order.filter(n => n !== 'twelvedata')];
+  if (s.primary === 'alphavantage') order = ['alphavantage', ...order.filter(n => n !== 'alphavantage')];
+  const errs = [];
+  try {
+    const r = await relay('history', { symbol: sym, order: order.join(','), ...(new URLSearchParams(location.search).get('debug_fail') ? { debug_fail: new URLSearchParams(location.search).get('debug_fail') } : {}) });
+    absorbAttempts(r); validateCandles(r.candles); store.set(ck, r); return withMeta(r, false);
+  } catch (e) { absorbAttempts(e); errs.push('relais : ' + e.message); }
+  if (!sym.includes('XAU') && !Health.blocked('frankfurter')) { // secours navigateur : Frankfurter autorise le CORS
+    try {
+      const [f, t] = sym.split('/'), start = new Date(Date.now() - 190 * 864e5).toISOString().slice(0, 10);
+      const j = await (await fetch(`https://api.frankfurter.app/${start}..?from=${f}&to=${t}`)).json();
+      const c = Object.keys(j.rates).sort().map(d => { const p = j.rates[d][t]; return { date: d, open: p, high: p, low: p, close: p }; });
+      validateCandles(c); Health.ok('frankfurter');
+      const r = { symbol: sym, candles: c, source: 'frankfurter (direct navigateur)', fetched_at: new Date().toISOString() }; store.set(ck, r); return withMeta(r, false);
+    } catch (e) { Health.fail('frankfurter', e.message); errs.push('frankfurter direct : ' + e.message); }
+  }
+  if (cached && Date.now() - Date.parse(cached.fetched_at) < 7 * 864e5) return withMeta(cached, true);
+  throw Object.assign(new Error('N/A : ' + errs.join(' ; ')), { na: true });
+}
+
+/* ---- prix instantané : relais → dernière clôture → N/A ---- */
+async function fetchQuote(sym, hist, { force = false } = {}) {
+  const ck = 'quote_' + sym, c = store.get(ck, null);
+  if (c && !force && Date.now() - Date.parse(c.fetched_at) < 5 * 6e4) return withMeta(c, false);
+  try {
+    const r = await relay('quotes', { symbols: sym }), q = r.quotes?.[0];
+    if (q && q.price > 0) { const d = { price: q.price, datetime: q.datetime, source: q.source, fetched_at: new Date().toISOString(), close_only: false }; store.set(ck, d); Health.bump(q.source); return withMeta(d, false); }
+  } catch (e) { /* on passe à la dernière clôture */ }
+  const last = hist?.candles?.[hist.candles.length - 1];
+  if (last) return { price: last.close, datetime: last.date, source: 'clôture, pas instantané', fetched_at: hist.fetched_at, close_only: true, stale: hist.stale, age_minutes: ageMin(hist.fetched_at) };
+  return { price: null, na: 'aucune donnée de prix' };
+}
+
+/* ---- calendrier : relais → cache périmé (7 j, passés grisés) → indisponible / démo explicite ---- */
+async function fetchCalendar({ force = false } = {}) {
+  const c = store.get('calendar', null);
+  if (c && !force && Date.now() - Date.parse(c.fetched_at) < 5 * 6e4) return withMeta(c, false);
+  try { const r = await relay('calendar'); absorbAttempts(r); store.set('calendar', r); return withMeta(r, false); }
+  catch (e) { absorbAttempts(e); }
+  if (c && Date.now() - Date.parse(c.fetched_at) < 7 * 864e5) return withMeta(c, true);
+  if (getSettings().demo) return { events: DEMO_EVENTS(), source: 'DÉMO', fetched_at: new Date().toISOString(), stale: false, age_minutes: 0, demo: true };
+  const manual = store.get('calendar_manual', []);
+  return { events: manual, source: manual.length ? 'saisie manuelle' : 'indisponible', fetched_at: new Date().toISOString(), stale: false, age_minutes: 0, na: manual.length ? null : 'calendrier indisponible (saisie manuelle possible)' };
+}
+const DEMO_EVENTS = () => [{ id: 'demo1', title: 'Événement de démonstration', currency: 'USD', impact: 'fort', time: new Date(Date.now() + 864e5).toISOString(), forecast: null, previous: null, actual: null }];
+
+/* ---- news : relais → cache (72 h, périmé) → aucune news ---- */
+async function fetchNews({ force = false } = {}) {
+  const c = store.get('news', null);
+  if (c && !force && Date.now() - Date.parse(c.fetched_at) < 10 * 6e4) return withMeta(c, false);
+  try {
+    const s = getSettings(), av = s.avNews && Health.today('alphavantage') < 0.8 * DAILY_LIMIT.alphavantage;
+    const r = await relay('news', av ? { av_news: '1' } : {}); store.set('news', r); return withMeta(r, false);
+  } catch (e) {
+    if (c && Date.now() - Date.parse(c.fetched_at) < 72 * 36e5) return withMeta(c, true);
+    return { news: [], sources_status: {}, fetched_at: new Date().toISOString(), stale: false, age_minutes: 0, na: 'aucune news : ' + e.message };
+  }
+}
+
+/* ---- badges de source ---- */
+function badge(d) {
+  if (!d || d.na) return `<span class="badge na">N/A (${esc(d?.na || 'donnée absente')})</span>`;
+  if (d.stale) return `<span class="badge stale">périmé (il y a ${ageTxt(d.age_minutes)}) · ${esc(d.source)}</span>`;
+  return `<span class="badge">${esc(d.source)}</span>`;
+}
+
+/* ---- onglets + registre de rendu (rempli par les parties 2-4) ---- */
+const RENDER = {}; let currentTab = 'dashboard';
+function showTab(t) { currentTab = t; $$('.tab').forEach(s => s.classList.toggle('on', s.id === 'tab-' + t)); $$('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === t)); (RENDER[t] || (() => { }))(); }
+$('#tabs').addEventListener('click', e => { const b = e.target.closest('button[data-tab]'); if (b) showTab(b.dataset.tab); });
+/* ================= FIN PARTIE 1/4 — la suite du <script> arrive en partie 2/4 ================= */
+/* ================= PARTIE 2/4 : MOTEUR DE SCORING (déterministe, sans DOM) ================= */
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+const normalize = (x, scale) => (x == null || !isFinite(x)) ? null : clamp(x / scale * 100, -100, 100);
+const avg = a => { a = a.filter(v => v != null && isFinite(v)); return a.length ? a.reduce((s, v) => s + v, 0) / a.length : null; };
+function SMA(v, n) { if (v.length < n) return null; let s = 0; for (let i = v.length - n; i < v.length; i++) s += v[i]; return s / n; }
+function smaSeries(v, n) { const o = []; let s = 0; for (let i = 0; i < v.length; i++) { s += v[i]; if (i >= n) s -= v[i - n]; o.push(i >= n - 1 ? s / n : null); } return o; }
+function RSI(v, n = 14) { // Wilder
+  if (v.length < n + 1) return null; let g = 0, l = 0;
+  for (let i = 1; i <= n; i++) { const d = v[i] - v[i - 1]; d >= 0 ? g += d : l -= d; } g /= n; l /= n;
+  for (let i = n + 1; i < v.length; i++) { const d = v[i] - v[i - 1]; g = (g * (n - 1) + Math.max(d, 0)) / n; l = (l * (n - 1) + Math.max(-d, 0)) / n; }
+  return l === 0 ? (g === 0 ? 50 : 100) : 100 - 100 / (1 + g / l);
+}
+function ATR(c, n = 14) { // Wilder
+  if (c.length < n + 1) return null;
+  const tr = i => Math.max(c[i].high - c[i].low, Math.abs(c[i].high - c[i - 1].close), Math.abs(c[i].low - c[i - 1].close));
+  let a = 0; for (let i = 1; i <= n; i++) a += tr(i); a /= n;
+  for (let i = n + 1; i < c.length; i++) a = (a * (n - 1) + tr(i)) / n;
+  return a;
+}
+const retN = (v, n) => v.length > n ? v[v.length - 1] / v[v.length - 1 - n] - 1 : null;
+const parsePair = s => s.split('/');
+const comp = (key, value, raw, source, reason) => ({ key, value: value == null ? null : clamp(value, -100, 100), raw: raw ?? null, source: source || null, reason: value == null ? (reason || 'donnée absente') : null, contribution: 0 });
+
+/* ---- 1. politique monétaire : rates[cur] = {policy, y2, policyPrev, y2Prev, date} (saisie manuelle) ---- */
+function policyComponent(sym, rates) {
+  const [b, q] = parsePair(sym), old = [];
+  const get = cur => {
+    const r = rates?.[cur]; if (!r || (toNum(r.policy) == null && toNum(r.y2) == null)) return { err: `taux ${cur} non saisis` };
+    const age = r.date ? (Date.now() - Date.parse(r.date)) / 864e5 : null;
+    if (age == null) return { err: `date des taux ${cur} manquante` };
+    if (age > 120) return { err: `taux ${cur} trop anciens (${Math.round(age)} j)` };
+    if (age > 45) old.push(cur);
+    return { policy: toNum(r.policy), y2: toNum(r.y2), pp: toNum(r.policyPrev), yp: toNum(r.y2Prev) };
+  };
+  if (b === 'XAU') { // l'or réagit à la tendance du rendement 2 ans US
+    const u = get('USD'); if (u.err) return comp('policy', null, null, null, u.err);
+    if (u.y2 == null || u.yp == null) return comp('policy', null, null, null, 'rendement 2 ans US et valeur précédente requis pour l\'or');
+    return comp('policy', normalize(-(u.y2 - u.yp), 0.5), `Δ rdt 2 ans US ${(u.y2 - u.yp).toFixed(2)} pt`, 'manuel' + (old.length ? ' (ancien)' : ''));
+  }
+  const A = get(b), B = get(q); if (A.err || B.err) return comp('policy', null, null, null, A.err || B.err);
+  const parts = [], raws = [];
+  if (A.policy != null && B.policy != null) { parts.push(normalize(A.policy - B.policy, 3)); raws.push(`écart taux ${(A.policy - B.policy).toFixed(2)} pt`); }
+  if (A.y2 != null && B.y2 != null) { parts.push(normalize(A.y2 - B.y2, 3)); raws.push(`écart 2 ans ${(A.y2 - B.y2).toFixed(2)} pt`); }
+  if (A.policy != null && A.pp != null && B.policy != null && B.pp != null) { const t = (A.policy - A.pp) - (B.policy - B.pp); parts.push(normalize(t, 1)); raws.push(`tendance ${t.toFixed(2)} pt`); }
+  const v = avg(parts); return comp('policy', v, raws.join(' ; '), 'manuel' + (old.length ? ' (ancien : ' + old.join(',') + ')' : ''), 'écarts non calculables');
+}
+
+/* ---- 2. momentum ---- */
+function momentumComponent(sym, candles) {
+  const cl = candles.map(c => c.close), p = cl[cl.length - 1], sc = sym.startsWith('XAU') ? 2 : 1;
+  const s20 = SMA(cl, 20), s50 = SMA(cl, 50), s100 = SMA(cl, 100), s50b = cl.length >= 60 ? SMA(cl.slice(0, -10), 50) : null, rsi = RSI(cl, 14), r1 = retN(cl, 21), r3 = retN(cl, 63);
+  const parts = [s20 && normalize(p / s20 - 1, 0.02 * sc), s50 && normalize(p / s50 - 1, 0.02 * sc), s100 && normalize(p / s100 - 1, 0.03 * sc), s50 && s50b && normalize(s50 / s50b - 1, 0.015 * sc), normalize(r1, 0.03 * sc), normalize(r3, 0.06 * sc), rsi == null ? null : clamp((rsi - 50) / 30 * 100, -100, 100)];
+  return comp('momentum', avg(parts), `prix/MM20 ${s20 ? ((p / s20 - 1) * 100).toFixed(2) : 'N/A'} % ; MM50 ${s50 ? ((p / s50 - 1) * 100).toFixed(2) : 'N/A'} % ; MM100 ${s100 ? ((p / s100 - 1) * 100).toFixed(2) : 'N/A'} % ; 1 m ${r1 == null ? 'N/A' : (r1 * 100).toFixed(2)} % ; 3 m ${r3 == null ? 'N/A' : (r3 * 100).toFixed(2)} % ; RSI ${rsi == null ? 'N/A' : rsi.toFixed(1)}`, null, 'historique insuffisant');
+}
+
+/* ---- 3. structure et volatilité ---- */
+function structureComponent(candles) {
+  if (candles.length < 22) return { c: comp('structure', null, null, null, 'historique insuffisant'), atr: null, noDirection: false };
+  const prev = candles.slice(-21, -1), last = candles[candles.length - 1], hi = Math.max(...prev.map(c => c.high)), lo = Math.min(...prev.map(c => c.low)), atr = ATR(candles, 14), rel = atr / last.close;
+  let v = last.close > hi ? 100 : last.close < lo ? -100 : ((last.close - lo) / (hi - lo || 1) * 2 - 1) * 60;
+  const noDirection = Math.abs(v) < 25 && rel < 0.004;
+  return { c: comp('structure', v, `ATR14 ${(rel * 100).toFixed(2)} % du prix ; ${last.close > hi ? 'cassure du plus haut 20 j' : last.close < lo ? 'cassure du plus bas 20 j' : 'dans le range 20 j'}${noDirection ? ' ; marché sans direction' : ''}`), atr, noDirection };
+}
+
+/* ---- 4. appétit pour le risque (proxy = moyenne des rendements AUD/USD, NZD/USD, USD/JPY chargés, hors la paire) ---- */
+const RISK_PAIRS = ['USD/JPY', 'USD/CHF', 'AUD/USD', 'NZD/USD', 'XAU/USD'];
+function riskComponent(sym, candles, allHist) {
+  if (!RISK_PAIRS.includes(sym)) return comp('risk', null, null, null, 'non applicable à cette paire');
+  const src = ['AUD/USD', 'NZD/USD', 'USD/JPY'].filter(s => s !== sym && allHist[s]?.candles?.length >= 60);
+  if (src.length < 2) return comp('risk', null, null, null, 'proxy de risque indisponible (moins de 2 paires chargées)');
+  const maps = src.map(s => { const m = {}, c = allHist[s].candles; for (let i = 1; i < c.length; i++) m[c[i].date] = c[i].close / c[i - 1].close - 1; return m; });
+  const own = {}; for (let i = 1; i < candles.length; i++) own[candles[i].date] = candles[i].close / candles[i - 1].close - 1;
+  const xs = [], ys = [];
+  Object.keys(own).sort().slice(-60).forEach(d => { if (maps.every(m => m[d] != null)) { xs.push(own[d]); ys.push(avg(maps.map(m => m[d]))); } });
+  if (xs.length < 30) return comp('risk', null, null, null, 'dates communes insuffisantes');
+  const mx = avg(xs), my = avg(ys); let sxy = 0, sx = 0, sy = 0; xs.forEach((x, i) => { sxy += (x - mx) * (ys[i] - my); sx += (x - mx) ** 2; sy += (ys[i] - my) ** 2; });
+  const corr = sxy / Math.sqrt(sx * sy || 1), trend = ys.slice(-20).reduce((a, v) => a + v, 0);
+  return comp('risk', corr * clamp(trend / 0.02, -1, 1) * 100, `corrélation ${corr.toFixed(2)} ; proxy 20 j ${(trend * 100).toFixed(2)} %`, 'calculé (' + src.join(', ') + ')');
+}
+
+/* ---- 5. flux d'actualité (48 h, demi-vie 12 h) ---- */
+const DIRV = { haussier: 1, baissier: -1, neutre: 0 };
+function newsCurrencyScore(news, cur, now) {
+  let s = 0, n = 0; const items = [];
+  for (const it of news) {
+    const ageH = (now - Date.parse(it.published_at)) / 36e5; if (ageH > 48 || ageH < 0) continue;
+    const imp = it.sentiment?.currency_impacts?.find(x => x.currency === cur); if (!imp || !(imp.force > 0)) continue;
+    const w = (DIRV[imp.direction] || 0) * imp.force * Math.pow(0.5, ageH / 12); s += w; n++; items.push({ id: it.id, title: it.title, source: it.source, w });
+  }
+  return { s, n, items };
+}
+function newsComponent(sym, news, now) {
+  const [b, q] = parsePair(sym), A = newsCurrencyScore(news, b, now), B = newsCurrencyScore(news, q, now);
+  if (A.n < 3 || B.n < 3) return { c: comp('news', null, null, null, `peu de news (${b} : ${A.n}, ${q} : ${B.n})`), items: [...A.items, ...B.items] };
+  return { c: comp('news', normalize(A.s - B.s, 6), `${b} ${A.s.toFixed(2)} − ${q} ${B.s.toFixed(2)} (${A.n}+${B.n} news)`, news.some(n => n.sentiment?.heuristic) ? 'Gemini/heuristique' : 'Gemini'), items: [...A.items, ...B.items] };
+}
+
+/* ---- risque événementiel : réduit la CONVICTION, jamais le sens ---- */
+function eventRisk(sym, events, news, now) {
+  const cur = parsePair(sym), risks = []; let pen = 0;
+  (events || []).filter(e => e.impact === 'fort' && cur.includes(e.currency) && Date.parse(e.time) > now && Date.parse(e.time) < now + 48 * 36e5).slice(0, 3).forEach(e => { pen += 8; risks.push(`Événement fort : ${e.currency} ${e.title} (${fmtTime(e.time)})`); });
+  news.filter(n => now - Date.parse(n.published_at) < 24 * 36e5 && n.sentiment?.currency_impacts?.some(i => cur.includes(i.currency) && i.force >= 3) && ['banque_centrale', 'geopolitique'].includes(n.sentiment.categorie)).slice(0, 2).forEach(n => { pen += 10; risks.push(`Titre de force 3 : ${n.title}`); });
+  return { penalty: Math.min(pen, 30), risks };
+}
+
+/* ---- fiabilité des données ---- */
+function reliability(hist, comps) {
+  const missing = comps.filter(c => c.value == null).length;
+  if (hist.stale || missing >= 3) return { label: 'basse', q: 0.4 };
+  if (/frankfurter|stooq/.test(hist.source) || hist.age_minutes > 1440 || missing >= 2) return { label: 'moyenne', q: 0.7 };
+  return { label: 'haute', q: 1 };
+}
+const biasOf = s => s >= 20 ? 'Haussier' : s <= -20 ? 'Baissier' : 'Neutre';
+
+/* ---- score d'une paire ---- */
+function computePair(sym, hist, ctx) {
+  const now = ctx.now || Date.now(), W = ctx.settings.weights;
+  if (!hist?.candles?.length) return { sym, excluded: 'pas d\'historique de prix pour ' + sym };
+  const [b, q] = parsePair(sym), cdl = hist.candles, stale24 = hist.stale && hist.age_minutes > 1440, price = cdl[cdl.length - 1].close;
+  const str = structureComponent(cdl), nw = newsComponent(sym, ctx.news || [], now);
+  const market = (c) => stale24 ? comp(c.key, null, null, null, 'données périmées de plus de 24 h') : c;
+  const comps = [policyComponent(sym, ctx.settings.rates), market(momentumComponent(sym, cdl)), market(str.c), market(riskComponent(sym, cdl, ctx.allHist || {})), nw.c];
+  const keys = ['policy', 'momentum', 'structure', 'risk', 'news'];
+  let tot = 0; comps.forEach((c, i) => { c.weight = +W[keys[i]] || 0; if (c.value != null) tot += c.weight; });
+  if (!tot) return { sym, excluded: 'aucun composant calculable : ' + comps.map(c => c.key + ' (' + c.reason + ')').join(' ; ') };
+  let score = 0; comps.forEach(c => { if (c.value != null) { c.contribution = c.weight / tot * c.value; score += c.contribution; } });
+  score = Math.round(score);
+  const used = comps.filter(c => c.value != null && c.weight > 0), agree = used.filter(c => Math.sign(c.value) === Math.sign(score) || c.value === 0).reduce((a, c) => a + c.weight, 0) / (used.reduce((a, c) => a + c.weight, 0) || 1);
+  const ev = eventRisk(sym, ctx.events, ctx.news || [], now), rel = reliability(hist, comps), risks = [...ev.risks];
+  if (str.noDirection) risks.push('Marché sans direction (volatilité faible, range)');
+  comps.filter(c => c.value == null && c.weight > 0).forEach(c => risks.push(`Composant exclu « ${c.key} » : ${c.reason}`));
+  let conv = (0.6 * Math.abs(score) + 0.4 * agree * 100) * (str.noDirection ? 0.85 : 1) - ev.penalty;
+  conv = Math.round(clamp(conv, 0, 100));
+  const hi = (n) => Math.max(...cdl.slice(-n).map(c => c.high)), lo = (n) => Math.min(...cdl.slice(-n).map(c => c.low)), s50 = SMA(cdl.map(c => c.close), 50);
+  const uniq = a => [...new Set(a.filter(x => x != null).map(x => +x.toFixed(sym.includes('JPY') ? 3 : 5)))].sort((x, y) => x - y);
+  const levels = { supports: uniq([lo(20), lo(50), s50 && s50 < price ? s50 : null]).filter(x => x < price), resistances: uniq([hi(20), hi(50), s50 && s50 > price ? s50 : null]).filter(x => x > price), atr: str.atr };
+  const topNews = nw.items.sort((x, y) => Math.abs(y.w) - Math.abs(x.w)).slice(0, 3);
+  return { sym, price, score, bias: biasOf(score), conviction: conv, components: comps, levels, topNews, risks, reliability: rel.label, quality: rel.q, source: hist.source, stale: hist.stale, agreement: Math.round(agree * 100) };
+}
+
+/* ---- Edge global, régime macro (règles) ---- */
+function edgeGlobal(results) {
+  const r = results.filter(x => !x.excluded); if (!r.length) return null;
+  const w = r.reduce((a, x) => a + x.quality, 0); return Math.round(r.reduce((a, x) => a + x.conviction * x.quality, 0) / w);
+}
+function macroRegime(results) {
+  const by = Object.fromEntries(results.filter(x => !x.excluded).map(x => [x.sym, x.score]));
+  const usd = avg(Object.entries(by).filter(([s]) => s !== 'XAU/USD').map(([s, v]) => s.startsWith('USD/') ? v : -v));
+  const risk = avg(['AUD/USD', 'NZD/USD'].map(s => by[s]).concat(by['USD/JPY'] == null ? [] : [by['USD/JPY']]));
+  const out = [];
+  out.push(usd == null ? 'Dollar : indéterminé (données insuffisantes)' : usd > 15 ? 'Dollar fort' : usd < -15 ? 'Dollar faible' : 'Dollar sans tendance nette');
+  out.push(risk == null ? 'Risque : indéterminé' : risk > 15 ? 'Appétit pour le risque (risk-on)' : risk < -15 ? 'Aversion au risque (risk-off)' : 'Risque neutre');
+  if (by['XAU/USD'] != null) out.push(by['XAU/USD'] > 20 ? 'Or soutenu' : by['XAU/USD'] < -20 ? 'Or sous pression' : 'Or neutre');
+  return out;
+}
+
+/* ---- tests : runSelfTests() dans la console ---- */
+function runSelfTests() {
+  const T = []; const eq = (n, a, b, tol = 1e-6) => T.push({ n, ok: Math.abs(a - b) <= tol, got: a, want: b });
+  eq('SMA [1..5] n=5', SMA([1, 2, 3, 4, 5], 5), 3); eq('SMA n trop grand', SMA([1, 2], 5) === null ? 1 : 0, 1);
+  eq('RSI hausse pure = 100', RSI(Array.from({ length: 20 }, (_, i) => i + 1)), 100); eq('RSI baisse pure = 0', RSI(Array.from({ length: 20 }, (_, i) => 20 - i)), 0); eq('RSI plat = 50', RSI(Array(20).fill(5)), 50);
+  eq('ATR range 2 constant', ATR(Array.from({ length: 20 }, () => ({ high: 11, low: 9, close: 10 }))), 2);
+  eq('normalize +', normalize(1.5, 3), 50); eq('normalize clamp', normalize(10, 3), 100); eq('normalize null', normalize(null, 3) === null ? 1 : 0, 1);
+  eq('retN', retN([100, 110], 1), 0.1);
+  const cs = Array.from({ length: 120 }, (_, i) => { const p = 1 + i * 0.001; return { date: new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10), open: p, high: p * 1.001, low: p * 0.999, close: p }; });
+  const r = computePair('EUR/USD', { candles: cs, source: 'twelvedata', stale: false, age_minutes: 5 }, { settings: { weights: { policy: 30, momentum: 30, structure: 15, risk: 10, news: 15 }, rates: {} }, news: [], events: [], allHist: {} });
+  eq('tendance haussière → score > 20', r.score > 20 ? 1 : 0, 1); eq('composants manquants renormalisés (poids total 1)', Math.abs(r.components.reduce((a, c) => a + (c.value != null ? c.weight : 0), 0)) > 0 ? 1 : 0, 1);
+  eq('policy exclu sans taux', r.components[0].value === null ? 1 : 0, 1); eq('news exclu sans news', r.components[4].value === null ? 1 : 0, 1);
+  const ex = computePair('EUR/USD', { candles: cs, source: 'x', stale: false, age_minutes: 0 }, { settings: { weights: { policy: 100, momentum: 0, structure: 0, risk: 0, news: 0 }, rates: {} }, news: [], events: [], allHist: {} });
+  eq('paire exclue si rien de calculable', ex.excluded ? 1 : 0, 1);
+  const bad = T.filter(t => !t.ok); console.table(T); console.log(bad.length ? `❌ ${bad.length} test(s) en échec` : `✅ ${T.length} tests OK`); return !bad.length;
+}
+/* ================= FIN PARTIE 2/4 ================= */
+/* ================= PARTIE 3/4 : CHARGEMENT, DASHBOARD, ANALYSE, NEWS ================= */
+const APP = { hist: {}, histErr: {}, quote: {}, cal: null, news: null, results: [], loadedAt: null, sort: { k: 'conviction', d: -1 }, calFilter: '', busy: false, deepSym: null, newsF: { cur: '', cat: '' } };
+const PRIORITY = ['EUR/USD', 'USD/JPY', 'XAU/USD', 'GBP/USD', 'AUD/USD', 'USD/CAD', 'USD/CHF', 'NZD/USD'];
+const decs = s => s.includes('JPY') ? 3 : s.startsWith('XAU') ? 2 : 5;
+const fp = (s, p) => p == null ? 'N/A' : (+p).toFixed(decs(s));
+const activePairs = () => { const a = getSettings().active; return PRIORITY.filter(p => a[p]); };
+const txt = x => typeof x === 'string' ? x : x == null ? '' : JSON.stringify(x);
+const cls = v => v > 0 ? 'up' : v < 0 ? 'dn' : 'mu';
+const ACT = {}; document.addEventListener('click', e => { const t = e.target.closest('[data-act]'); if (t && ACT[t.dataset.act]) ACT[t.dataset.act](t, e); });
+const setProg = (t, pct) => { const p = $('#prog'); if (p) p.innerHTML = `<div class="mu">${esc(t)}</div>${pct != null ? `<div class="bar"><i style="width:${pct}%"></i></div>` : ''}`; };
+const askModal = (html, yes = 'Continuer') => new Promise(res => { openModal(`${html}<p><button class="btn pri" id="mY">${yes}</button> <button class="btn" id="mN">Annuler</button></p>`); $('#mY').onclick = () => { closeModal(); res(true); }; $('#mN').onclick = () => { closeModal(); res(false); }; });
+
+/* ---- chargement séquentiel, budget de quota, pause par minute ---- */
+const CALLS = {}, PERMIN = { alphavantage: 5, twelvedata: 8 };
+async function minuteGate(src) {
+  const p = String(src).split(/[ _]/)[0]; if (!PERMIN[p]) return; const now = Date.now();
+  CALLS[p] = (CALLS[p] || []).filter(t => now - t < 6e4); CALLS[p].push(now);
+  if (CALLS[p].length >= PERMIN[p]) { setProg('Pause de 13 s (quota par minute)…'); await sleep(13000); }
+}
+async function loadAll(force) {
+  if (APP.busy) return; APP.busy = true;
+  try {
+    const s = getSettings(); let pairs = activePairs();
+    const fresh = p => { const c = store.get('hist_' + p, null); return c && Date.now() - Date.parse(c.fetched_at) < 432e5; };
+    const need = pairs.filter(p => force || !fresh(p));
+    const keyed = ['twelvedata', 'alphavantage'].filter(n => s.keys[n] && !Health.blocked(n));
+    const rem = keyed.length ? Math.max(...keyed.map(n => DAILY_LIMIT[n] - Health.today(n))) : Infinity;
+    let msg = `Coût estimé : ${need.length} requête(s) d'historique` + (rem === Infinity ? ' (sources sans clé : pas de quota)' : ` ; quota restant aujourd'hui : ${Math.max(rem, 0)}`) + '.';
+    if (rem !== Infinity && need.length > rem) {
+      const skipped = need.slice(Math.max(rem, 0)); pairs = pairs.filter(p => !skipped.includes(p) || store.get('hist_' + p, null));
+      msg += ` Quota insuffisant : seules les paires prioritaires sont rechargées ; ${skipped.join(', ')} restent sur cache ou N/A.`;
+      toast(msg, 9000);
+    }
+    if (force && need.length && !(await askModal(`<p>${esc(msg)}</p>`))) return;
+    setProg(msg, 0); const doQuotes = keyed.length > 0 && rem >= need.length + pairs.length;
+    APP.histErr = {};
+    for (let i = 0; i < pairs.length; i++) {
+      const p = pairs[i]; setProg(`${i + 1}/${pairs.length} paires — ${p}`, Math.round(i / pairs.length * 100));
+      try {
+        const h = await fetchHistory(p, { force }); APP.hist[p] = h;
+        if (!h.stale && Date.now() - Date.parse(h.fetched_at) < 15000) await minuteGate(h.source);
+        APP.quote[p] = doQuotes ? await fetchQuote(p, h, { force }) : await fetchQuote(p, h, { force: false }).catch(() => null);
+        if (!doQuotes) { const l = h.candles[h.candles.length - 1]; APP.quote[p] = { price: l.close, datetime: l.date, source: 'clôture, pas instantané', stale: h.stale, age_minutes: h.age_minutes, close_only: true }; }
+      } catch (e) { delete APP.hist[p]; APP.histErr[p] = e.message; }
+    }
+    setProg('Calendrier et news…', 90);
+    [APP.cal, APP.news] = await Promise.all([fetchCalendar({ force }), fetchNews({ force })]);
+    setProg('Sentiment des news…', 95); await ensureSentiment();
+    computeAll(); APP.loadedAt = new Date().toISOString(); setProg('Chargé à ' + new Date().toLocaleTimeString('fr-FR'), 100);
+  } catch (e) { toast('Chargement : ' + e.message); }
+  finally { APP.busy = false; showTab(currentTab); }
+}
+function computeAll() {
+  const s = getSettings(), now = Date.now(), news = APP.news?.news || [], events = APP.cal?.events || [];
+  APP.results = activePairs().map(sym => APP.hist[sym] ? computePair(sym, APP.hist[sym], { settings: s, news, events, allHist: APP.hist, now }) : { sym, excluded: APP.histErr[sym] || 'pas de données' });
+}
+
+/* ---- sentiment : Gemini (1 appel groupé, cache 30 min) → mots-clés (heuristique) → aucun ---- */
+const HEUR = [[/hike|hawkish|raises? rates?|higher|strong|surge|rally|beat|jumps?/i, 1], [/cuts?|dovish|lower|weak|slump|falls?|drops?|miss|recession|plunge/i, -1]];
+function heuristic(n) {
+  const cur = n.currencies || []; if (!cur.length) return null; let d = 0; HEUR.forEach(([r, v]) => { if (r.test(n.title)) d += v; });
+  const dir = d > 0 ? 'haussier' : d < 0 ? 'baissier' : 'neutre';
+  return { currency_impacts: cur.map(c => ({ currency: c, direction: dir, force: d ? 1 : 0 })), categorie: /inflation|cpi|pce/i.test(n.title) ? 'inflation' : /jobs|payroll|employment/i.test(n.title) ? 'emploi' : n.impact_hint === 'banque centrale' ? 'banque_centrale' : 'autre', heuristic: true };
+}
+const CATS = ['banque_centrale', 'inflation', 'emploi', 'croissance', 'geopolitique', 'matieres_premieres', 'autre'];
+async function ensureSentiment() {
+  const list = (APP.news?.news || []).slice(0, 40); if (!list.length) return;
+  const cache = store.get('sent', {}), now = Date.now(), todo = list.filter(n => !(cache[n.id] && now - cache[n.id].at < 18e5));
+  const failAt = store.get('sent_fail', 0);
+  if (todo.length && now - failAt > 6e5 && relayList().length) {
+    try {
+      const prompt = 'Titres numérotés :\n' + todo.map((n, i) => `${i + 1}. ${n.title}`).join('\n') + '\nRenvoie {"items":[{"n":1,"currency_impacts":[{"currency":"USD","direction":"haussier|baissier|neutre","force":0-3}],"categorie":"' + CATS.join('|') + '"}]}';
+      const r = await relay('chat', {}, { system: 'Analyste macro. Base-toi UNIQUEMENT sur le titre. Réponds « neutre » (force 0) si rien ne permet de conclure. Devises possibles : USD EUR GBP JPY CHF AUD CAD NZD XAU WTI. JSON strict, sans texte autour.', prompt, model: getSettings().model });
+      (r.parsed?.items || []).forEach(it => { const n = todo[it.n - 1]; if (n && Array.isArray(it.currency_impacts)) cache[n.id] = { at: now, v: { currency_impacts: it.currency_impacts.filter(x => x && x.currency && DIRV[x.direction] !== undefined).map(x => ({ currency: x.currency, direction: x.direction, force: clamp(+x.force || 0, 0, 3) })), categorie: CATS.includes(it.categorie) ? it.categorie : 'autre' } }; });
+    } catch (e) { store.set('sent_fail', now); }
+  }
+  list.forEach(n => { n.sentiment = cache[n.id]?.v || heuristic(n) || null; });
+  const keep = {}; list.forEach(n => { if (cache[n.id]) keep[n.id] = cache[n.id]; }); store.set('sent', keep);
+}
+
+/* ---- graphiques SVG ---- */
+function spark(c, n = 60) {
+  const v = c.slice(-n).map(x => x.close), mn = Math.min(...v), mx = Math.max(...v), w = 90, h = 26;
+  const pts = v.map((y, i) => `${(i / (v.length - 1) * w).toFixed(1)},${(h - (y - mn) / (mx - mn || 1) * h).toFixed(1)}`).join(' ');
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><polyline points="${pts}" fill="none" stroke="${v[v.length - 1] >= v[0] ? 'var(--up)' : 'var(--dn)'}" stroke-width="1.5"/></svg>`;
+}
+function priceChart(c, levels) {
+  const n = Math.min(100, c.length), cl = c.map(x => x.close), ser = [[20, '#f0a030'], [50, '#4f8cff'], [100, '#b56cff']].map(([k, col]) => [k, col, smaSeries(cl, k).slice(-n)]);
+  const v = cl.slice(-n), all = v.concat(...ser.map(s => s[2].filter(x => x != null)), levels?.supports || [], levels?.resistances || []), mn = Math.min(...all), mx = Math.max(...all), W = 700, H = 240;
+  const X = i => i / (n - 1) * W, Y = y => H - (y - mn) / (mx - mn || 1) * (H - 10) - 5, line = (a, col, sw) => { const pts = a.map((y, i) => y == null ? null : `${X(i).toFixed(1)},${Y(y).toFixed(1)}`).filter(Boolean).join(' '); return `<polyline points="${pts}" fill="none" stroke="${col}" stroke-width="${sw}"/>`; };
+  const lv = [...(levels?.supports || []).map(y => [y, 'var(--up)']), ...(levels?.resistances || []).map(y => [y, 'var(--dn)'])].map(([y, col]) => `<line x1="0" x2="${W}" y1="${Y(y)}" y2="${Y(y)}" stroke="${col}" stroke-dasharray="4 4" opacity=".6"/>`).join('');
+  return `<div class="scroll"><svg viewBox="0 0 ${W} ${H}" style="width:100%;min-width:420px;height:auto">${lv}${line(v, 'var(--tx)', 1.6)}${ser.map(s => line(s[2], s[1], 1.2)).join('')}</svg></div><div class="mu" style="font-size:12px">Prix · <span style="color:#f0a030">MM20</span> · <span style="color:#4f8cff">MM50</span> · <span style="color:#b56cff">MM100</span> · pointillés : supports (vert) / résistances (rouge)</div>`;
+}
+const miniBars = r => r.components.map(c => c.value == null ? `<span class="badge na" title="${esc(c.key + ' : ' + c.reason)}">${esc(c.key.slice(0, 3))} N/A</span>` : `<span title="${esc(c.key + ' ' + Math.round(c.value) + ' — ' + c.raw)}" style="display:inline-block;width:34px;margin-right:3px"><div class="bar"><i style="width:${Math.abs(c.value)}%;background:var(${c.value >= 0 ? '--up' : '--dn'})"></i></div></span>`).join('');
+
+/* ---- Dashboard ---- */
+function renderDashboard() {
+  const s = getSettings(), R = APP.results, edge = edgeGlobal(R), cal = APP.cal, sort = APP.sort;
+  const rows = R.filter(r => !r.excluded).sort((a, b) => { const k = sort.k; const va = k === 'sym' ? a.sym : a[k], vb = k === 'sym' ? b.sym : b[k]; return (va > vb ? 1 : va < vb ? -1 : 0) * sort.d; });
+  const src = ['twelvedata', 'alphavantage', 'frankfurter', 'stooq', 'finnhub'].map(n => { const st = Health.state(n), c = st === 'OK' ? 'up' : st === 'dégradé' || st === 'non testé' ? 'mu' : 'dn'; return `<span class="badge ${c === 'dn' ? 'na' : ''}">${esc(n)} : ${esc(st)}</span>`; }).join('');
+  const now = Date.now(), evs = (cal?.events || []).filter(e => (e.impact === 'fort' || e.impact === 'moyen') && Date.parse(e.time) > now - 864e5 && Date.parse(e.time) < now + 7 * 864e5 && (!APP.calFilter || e.currency === APP.calFilter)).sort((a, b) => a.time.localeCompare(b.time));
+  const th = (k, l) => `<th data-act="sort" data-k="${k}" style="cursor:pointer">${l}${sort.k === k ? (sort.d > 0 ? ' ▲' : ' ▼') : ''}</th>`;
+  $('#dash').innerHTML = `
+  <div class="card"><button class="btn pri" data-act="refresh" ${APP.busy ? 'disabled' : ''}>Actualiser</button> <span id="prog" class="mu"></span><div style="margin-top:6px">${src}</div></div>
+  <div class="grid">
+   <div class="card"><b>Edge global</b><div style="font-size:32px">${edge ?? 'N/A'}<span class="mu" style="font-size:14px"> / 100</span></div><div class="bar"><i style="width:${edge || 0}%"></i></div></div>
+   <div class="card"><b>Régime macro (règles)</b><ul>${macroRegime(R).map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>
+   <div class="card"><b>Tickers</b><div>${R.filter(r => !r.excluded).map(r => { const q = APP.quote[r.sym]; return `<div>${esc(r.sym)} <b>${fp(r.sym, q?.price)}</b> ${badge(q)}</div>`; }).join('') || '<span class="mu">Aucune donnée — clique sur Actualiser.</span>'}</div></div>
+  </div>
+  <div class="card"><b>Scores par paire</b><div class="scroll"><table class="tbl"><tr>${th('sym', 'Paire')}<th>Prix</th>${th('score', 'Score')}<th>Biais</th>${th('conviction', 'Conviction')}${th('reliability', 'Fiabilité')}<th>Composants (pol·mom·str·ris·news)</th><th>60 j</th></tr>
+  ${rows.map(r => `<tr data-act="open" data-sym="${esc(r.sym)}" style="cursor:pointer"><td>${esc(r.sym)}</td><td>${fp(r.sym, APP.quote[r.sym]?.price ?? r.price)} ${badge(APP.quote[r.sym] || { source: r.source, stale: r.stale, age_minutes: APP.hist[r.sym]?.age_minutes })}</td><td class="${cls(r.score)}"><b>${r.score}</b></td><td>${esc(r.bias)}</td><td>${r.conviction}</td><td>${esc(r.reliability)}</td><td>${miniBars(r)}</td><td>${spark(APP.hist[r.sym].candles)}</td></tr>`).join('')}</table></div>
+  ${R.filter(r => r.excluded).map(r => `<div class="dn">${esc(r.sym)} exclue du classement : ${esc(r.excluded)}</div>`).join('')}</div>
+  <div class="card"><b>Calendrier (7 jours, impact moyen/fort)</b> ${badge(cal && cal.na ? cal : cal)}
+   <select data-act="calfilter">${['', 'USD', 'EUR', 'GBP', 'JPY', 'CHF', 'AUD', 'CAD', 'NZD'].map(c => `<option value="${c}" ${APP.calFilter === c ? 'selected' : ''}>${c || 'Toutes devises'}</option>`).join('')}</select>
+   ${cal?.na ? `<p class="dn">${esc(cal.na)}</p>` : ''}<div class="scroll"><table class="tbl">${evs.map(e => `<tr style="${Date.parse(e.time) < now || cal.stale ? 'opacity:.5' : ''}"><td>${fmtTime(e.time)}</td><td>${esc(e.currency)}</td><td class="${e.impact === 'fort' ? 'dn' : 'mu'}">${esc(e.impact)}</td><td>${esc(e.title)}</td><td class="mu">prév. ${esc(e.forecast ?? '—')} · préc. ${esc(e.previous ?? '—')}</td></tr>`).join('')}</table></div></div>`;
+}
+ACT.refresh = () => loadAll(true); ACT.sort = t => { const k = t.dataset.k; APP.sort = { k, d: APP.sort.k === k ? -APP.sort.d : -1 }; renderDashboard(); };
+ACT.open = t => { APP.deepSym = t.dataset.sym; showTab('deep'); };
+document.addEventListener('change', e => { if (e.target.dataset.act === 'calfilter') { APP.calFilter = e.target.value; renderDashboard(); } if (e.target.id === 'deepSel') { APP.deepSym = e.target.value; renderDeep(); } });
+RENDER.dashboard = renderDashboard;
+
+/* ---- Analyse approfondie ---- */
+function renderDeep() {
+  const R = APP.results.filter(r => !r.excluded), sym = APP.deepSym && R.find(r => r.sym === APP.deepSym) ? APP.deepSym : R[0]?.sym, r = R.find(x => x.sym === sym);
+  if (!r) { $('#deepView').innerHTML = '<div class="card">Aucune paire calculée : charge les données depuis le Dashboard.</div>'; return; } APP.deepSym = sym;
+  const h = APP.hist[sym], last = store.get('analysis_' + sym, null);
+  $('#deepView').innerHTML = `<div class="card"><select id="deepSel">${R.map(x => `<option ${x.sym === sym ? 'selected' : ''}>${esc(x.sym)}</option>`).join('')}</select>
+  <b> ${esc(sym)}</b> ${fp(sym, r.price)} ${badge(h)} — score <b class="${cls(r.score)}">${r.score}</b> (${esc(r.bias)}), conviction ${r.conviction}, fiabilité ${esc(r.reliability)}</div>
+  <div class="grid"><div class="card"><b>Décomposition du score</b>${r.components.map(c => `<div style="margin:8px 0">${esc(c.key)} <span class="mu">(poids ${c.weight} %)</span> ${c.value == null ? `<span class="badge na">N/A (${esc(c.reason)})</span>` : `<b class="${cls(c.value)}">${Math.round(c.value)}</b> → contribution ${c.contribution.toFixed(1)} ${badge({ source: c.source })}<div class="bar"><i style="width:${Math.abs(c.value)}%;background:var(${c.value >= 0 ? '--up' : '--dn'})"></i></div><div class="mu" style="font-size:12px">${esc(c.raw)}</div>`}</div>`).join('')}</div>
+  <div class="card"><b>Niveaux clés</b><p>Supports : ${r.levels.supports.map(x => fp(sym, x)).join(' · ') || 'N/A'}<br>Résistances : ${r.levels.resistances.map(x => fp(sym, x)).join(' · ') || 'N/A'}<br>ATR14 : ${fp(sym, r.levels.atr)}</p>
+  <b>News les plus pesantes</b><ul>${r.topNews.map(n => `<li>${esc(n.title)} <span class="badge">${esc(n.source)}</span></li>`).join('') || '<li class="mu">Aucune news exploitable.</li>'}</ul>
+  <b>Facteurs de risque</b><ul>${r.risks.map(x => `<li>${esc(x)}</li>`).join('') || '<li class="mu">Aucun signalé.</li>'}</ul></div></div>
+  <div class="card">${priceChart(h.candles, r.levels)}</div>
+  <div class="card"><button class="btn pri" data-act="analyse" ${APP.busy ? 'disabled' : ''}>Analyse Gemini</button> <span id="aiStatus" class="mu"></span><div id="aiOut">${last ? renderAnalysis(last.a, last.meta) : ''}</div></div>`;
+}
+RENDER.deep = renderDeep;
+
+function buildContext(r) {
+  const cur = parsePair(r.sym), ev = (APP.cal?.events || []).filter(e => cur.includes(e.currency) && Date.parse(e.time) > Date.now() - 36e5 && Date.parse(e.time) < Date.now() + 7 * 864e5).slice(0, 15);
+  const news = (APP.news?.news || []).filter(n => n.currencies?.some(c => cur.includes(c))).slice(0, 10).map(n => ({ id: n.id, titre: n.title, source: n.source, heure: n.published_at, sentiment: n.sentiment ? { impacts: n.sentiment.currency_impacts, categorie: n.sentiment.categorie, heuristique: !!n.sentiment.heuristic } : null }));
+  return { paire: r.sym, prix: r.price, score: r.score, biais: r.bias, conviction: r.conviction, composants: r.components.map(c => ({ nom: c.key, valeur: c.value == null ? null : Math.round(c.value), brut: c.raw, source: c.source, raison_exclusion: c.reason })), niveaux: r.levels, evenements_a_venir: ev.map(e => ({ id: e.id, devise: e.currency, titre: e.title, impact: e.impact, heure: e.time, prevision: e.forecast, precedent: e.previous })), news, risques: r.risks, sources: { prix: r.source, calendrier: APP.cal?.source, news: Object.keys(APP.news?.sources_status || {}).filter(k => APP.news.sources_status[k].ok) }, horodatages: { historique: APP.hist[r.sym]?.fetched_at, calendrier: APP.cal?.fetched_at, news: APP.news?.fetched_at }, qualite_des_donnees: r.reliability };
+}
+const AI_SYS = `Tu es analyste macro Forex/Or. Réponds UNIQUEMENT par un objet JSON valide en français. Utilise UNIQUEMENT les chiffres du contexte fourni : n'invente ni prix, ni taux, ni dates ; signale les données manquantes ; sépare faits et interprétation ; chaque catalyseur cite l'id d'une news ou d'un événement fourni (source_id), sinon il porte "hypothese":true ; aucun conseil personnalisé. Schéma : {"resume":"","biais":"","conviction":0,"scenario_principal":{"description":"","declencheurs":[],"invalidation":""},"scenario_alternatif":{"description":"","declencheurs":[],"invalidation":""},"niveaux":{"supports":[],"resistances":[]},"catalyseurs":[{"texte":"","source_id":"","hypothese":false}],"risques":[],"correlations":[],"plan_de_trade":{"zone_entree":"","stop":"","objectifs":[],"risque_pct":0},"horizon":"","qualite_des_donnees":""}`;
+function rulesAnalysis(r) { // secours sans IA, mêmes champs
+  const up = r.bias === 'Haussier', dn = r.bias === 'Baissier', L = r.levels, p = r.price, atr = L.atr || 0;
+  const missing = r.components.filter(c => c.value == null).map(c => `${c.key} (${c.reason})`);
+  return { resume: `${r.sym} : score ${r.score}, biais ${r.bias}, conviction ${r.conviction}. Analyse automatique, sans IA.`, biais: r.bias, conviction: r.conviction, scenario_principal: { description: up ? 'Poursuite haussière tant que les supports tiennent.' : dn ? 'Poursuite baissière tant que les résistances tiennent.' : 'Range sans direction claire.', declencheurs: r.topNews.map(n => n.title), invalidation: up ? `Clôture sous ${fp(r.sym, L.supports.slice(-1)[0])}` : dn ? `Clôture au-dessus de ${fp(r.sym, L.resistances[0])}` : 'Cassure du range' }, scenario_alternatif: { description: 'Retournement contre le biais si le niveau d\'invalidation casse.', declencheurs: [], invalidation: '' }, niveaux: { supports: L.supports, resistances: L.resistances }, catalyseurs: r.topNews.map(n => ({ texte: n.title, source_id: n.id, hypothese: false })), risques: r.risks, correlations: [], plan_de_trade: (up || dn) && atr ? { zone_entree: fp(r.sym, p), stop: fp(r.sym, up ? p - 1.5 * atr : p + 1.5 * atr), objectifs: [fp(r.sym, up ? p + 2 * atr : p - 2 * atr), fp(r.sym, up ? p + 3.5 * atr : p - 3.5 * atr)], risque_pct: 1 } : { zone_entree: 'N/A', stop: 'N/A', objectifs: [], risque_pct: 0 }, horizon: 'swing', qualite_des_donnees: r.reliability + (missing.length ? ' ; manquant : ' + missing.join(' ; ') : '') };
+}
+function renderAnalysis(a, meta) {
+  const L = x => Array.isArray(x) ? `<ul>${x.map(i => `<li>${esc(txt(i))}</li>`).join('')}</ul>` : esc(txt(x)), sc = (t, o) => o ? `<div class="card"><b>${t}</b><p>${esc(txt(o.description))}</p>${o.declencheurs?.length ? '<i>Déclencheurs</i>' + L(o.declencheurs) : ''}<p class="mu">Invalidation : ${esc(txt(o.invalidation))}</p></div>` : '';
+  const pl = a.plan_de_trade || {};
+  return `<div class="warn">${esc(meta.label)}</div><div class="card"><b>Résumé</b> — ${esc(txt(a.biais))} (conviction ${esc(txt(a.conviction))})<p>${esc(txt(a.resume))}</p></div>
+  <div class="grid">${sc('Scénario principal', a.scenario_principal)}${sc('Scénario alternatif', a.scenario_alternatif)}
+  <div class="card"><b>Catalyseurs</b>${L((a.catalyseurs || []).map(c => typeof c === 'object' ? c.texte + (c.hypothese || !c.source_id ? ' [hypothèse]' : ' [' + c.source_id + ']') : c))}<b>Risques</b>${L(a.risques || [])}<b>Corrélations</b>${L(a.correlations || [])}</div>
+  <div class="card"><b>Plan (indicatif)</b><p>Entrée : ${esc(txt(pl.zone_entree))}<br>Stop : ${esc(txt(pl.stop))}<br>Objectifs : ${esc(txt(pl.objectifs))}<br>Risque : ${esc(txt(pl.risque_pct))} %<br>Horizon : ${esc(txt(a.horizon))}</p><p class="mu">Données : ${esc(txt(a.qualite_des_donnees))}</p></div></div>
+  <button class="btn" data-act="copyAI">Copier</button> <button class="btn" data-act="saveAI">Enregistrer au journal</button>
+  <div class="warn">Aide à l'analyse, pas un conseil en investissement. Les scores sont un modèle heuristique.</div>`;
+}
+ACT.analyse = async () => {
+  const r = APP.results.find(x => x.sym === APP.deepSym); if (!r || APP.busy) return; $('#aiStatus').textContent = 'Analyse en cours…'; let a, meta;
+  try {
+    const res = await relay('chat', {}, { system: AI_SYS, prompt: 'Contexte :\n' + JSON.stringify(buildContext(r)), shortPrompt: 'Contexte réduit :\n' + JSON.stringify({ paire: r.sym, score: r.score, biais: r.bias, conviction: r.conviction, niveaux: r.levels }), model: getSettings().model });
+    a = res.parsed; meta = { label: `Analyse Gemini (${res.model}) — ${new Date().toLocaleString('fr-FR')}`, ai: true };
+  } catch (e) { a = rulesAnalysis(r); meta = { label: `Automatique, sans IA (Gemini indisponible : ${e.message})` }; }
+  store.set('analysis_' + r.sym, { a, meta, at: new Date().toISOString() }); APP.lastAI = { sym: r.sym, a, r }; $('#aiOut').innerHTML = renderAnalysis(a, meta); $('#aiStatus').textContent = '';
+};
+ACT.copyAI = () => { const x = store.get('analysis_' + APP.deepSym, null); if (x) copyText(JSON.stringify(x.a, null, 2)); };
+ACT.saveAI = () => {
+  const x = store.get('analysis_' + APP.deepSym, null), r = APP.results.find(y => y.sym === APP.deepSym); if (!x) return;
+  const j = store.get('journal', []), pl = x.a.plan_de_trade || {};
+  j.push({ id: Date.now(), date: new Date().toISOString().slice(0, 10), asset: APP.deepSym, side: x.a.biais === 'Baissier' ? 'Vente' : x.a.biais === 'Haussier' ? 'Achat' : 'Neutre', entry: toNum(pl.zone_entree), exit: null, status: 'idée', pnl: null, thesis: txt(x.a.resume) });
+  store.set('journal', j); toast('Analyse enregistrée au journal.');
+};
+
+/* ---- News ---- */
+function renderNews() {
+  const N = APP.news; if (!N) { $('#newsView').innerHTML = '<div class="card">Aucune donnée : charge depuis le Dashboard (Actualiser).</div>'; return; }
+  const f = APP.newsF, now = Date.now(), list = (N.news || []).filter(n => (!f.cur || n.currencies.includes(f.cur)) && (!f.cat || n.sentiment?.categorie === f.cat));
+  const strength = n => (n.sentiment?.currency_impacts || []).reduce((m, i) => Math.max(m, i.force), 0);
+  const moves = (N.news || []).filter(n => now - Date.parse(n.published_at) < 864e5 && strength(n) > 0).sort((a, b) => strength(b) - strength(a)).slice(0, 5);
+  const sb = n => { const i = n.sentiment?.currency_impacts?.filter(x => x.force > 0) || []; return i.length ? i.map(x => `<span class="badge ${x.direction === 'haussier' ? '' : x.direction === 'baissier' ? 'na' : ''}">${esc(x.currency)} ${x.direction === 'haussier' ? '▲' : x.direction === 'baissier' ? '▼' : '='}${x.force}</span>`).join('') + (n.sentiment.heuristic ? '<span class="badge stale">heuristique</span>' : '') : '<span class="badge">sans sentiment</span>'; };
+  $('#newsView').innerHTML = `<div class="card"><b>Ce qui bouge (24 h)</b><ul>${moves.map(n => `<li>${esc(n.title)} ${sb(n)}</li>`).join('') || '<li class="mu">Rien de marquant.</li>'}</ul></div>
+  <div class="card"><b>État des sources</b> ${badge(N)} ${Object.entries(N.sources_status || {}).map(([k, v]) => `<span class="badge ${v.ok ? '' : 'na'}">${esc(k)} : ${v.ok ? v.count + ' items' : esc(v.error)}</span>`).join('')}${N.na ? `<p class="dn">${esc(N.na)}</p>` : ''}</div>
+  <div class="card"><select data-act="nf-cur">${['', 'USD', 'EUR', 'GBP', 'JPY', 'CHF', 'AUD', 'CAD', 'NZD', 'XAU', 'WTI'].map(c => `<option value="${c}" ${f.cur === c ? 'selected' : ''}>${c || 'Toutes devises'}</option>`).join('')}</select>
+  <select data-act="nf-cat">${['', ...CATS].map(c => `<option value="${c}" ${f.cat === c ? 'selected' : ''}>${c || 'Toutes catégories'}</option>`).join('')}</select>
+  ${list.map(n => { const u = safeUrl(n.url); return `<div style="padding:6px 0;border-bottom:1px solid var(--bd)">${u ? `<a href="${u}" target="_blank" rel="noopener noreferrer" style="color:var(--ac)">${esc(n.title)}</a>` : esc(n.title)}<br><span class="badge">${esc(n.source)}</span><span class="mu"> ${fmtTime(n.published_at)}</span> ${sb(n)}</div>`; }).join('') || '<p class="mu">Aucune news.</p>'}</div>`;
+}
+document.addEventListener('change', e => { if (e.target.dataset.act === 'nf-cur') { APP.newsF.cur = e.target.value; renderNews(); } if (e.target.dataset.act === 'nf-cat') { APP.newsF.cat = e.target.value; renderNews(); } });
+RENDER.news = renderNews;
+/* ================= FIN PARTIE 3/4 ================= */
+/* ================= PARTIE 4/4 : GÉNÉRATEUR, JOURNAL, RÉGLAGES, DÉMARRAGE ================= */
+
+/* ---- Générateur ---- */
+function renderGen() {
+  const R = APP.results.filter(r => !r.excluded);
+  $('#genView').innerHTML = `<div class="card"><b>Analyse guidée</b>
+  <p>${R.length ? R.map(r => `<label style="margin-right:10px"><input type="checkbox" class="gp" value="${esc(r.sym)}" checked> ${esc(r.sym)}</label>`).join('') : '<span class="mu">Aucune paire calculée : charge les données depuis le Dashboard.</span>'}</p>
+  <select id="gHor"><option value="intraday">Intraday</option><option value="swing" selected>Swing</option><option value="position">Position</option></select>
+  <button class="btn pri" data-act="genRun" ${R.length ? '' : 'disabled'}>Générer</button> <span id="gStatus" class="mu"></span></div><div id="genOut"></div>`;
+}
+RENDER.gen = renderGen;
+ACT.genRun = async () => {
+  const syms = $$('.gp:checked').map(x => x.value), hor = $('#gHor').value, rs = APP.results.filter(r => syms.includes(r.sym) && !r.excluded); if (!rs.length) return toast('Sélectionne au moins une paire.');
+  $('#gStatus').textContent = 'Génération…'; let out, label;
+  try {
+    const schema = '{"synthese":"","horizon":"","paires":[{"paire":"","biais":"","idee":"","niveaux":{"supports":[],"resistances":[]},"risques":[]}],"qualite_des_donnees":""}';
+    const res = await relay('chat', {}, { system: AI_SYS.split(' Schéma')[0] + ' Schéma : ' + schema, prompt: `Horizon : ${hor}\nContexte :\n` + JSON.stringify(rs.map(buildContext)), shortPrompt: JSON.stringify(rs.map(r => ({ paire: r.sym, score: r.score, biais: r.bias }))), model: getSettings().model });
+    out = res.parsed; label = `Gemini (${res.model}) — horizon ${hor}`;
+  } catch (e) {
+    out = { synthese: 'Synthèse automatique, sans IA.', horizon: hor, paires: rs.map(r => { const a = rulesAnalysis(r); return { paire: r.sym, biais: r.bias, idee: a.scenario_principal.description, niveaux: a.niveaux, risques: a.risques }; }), qualite_des_donnees: rs.map(r => r.sym + ' : ' + r.reliability).join(' ; ') };
+    label = 'Automatique, sans IA (Gemini indisponible : ' + e.message + ')';
+  }
+  $('#genOut').innerHTML = `<div class="warn">${esc(label)}</div><div class="card"><b>Synthèse</b><p>${esc(txt(out.synthese))}</p></div><div class="grid">${(out.paires || []).map(p => `<div class="card"><b>${esc(txt(p.paire))}</b> — ${esc(txt(p.biais))}<p>${esc(txt(p.idee))}</p><p class="mu">Supports : ${esc(txt(p.niveaux?.supports))}<br>Résistances : ${esc(txt(p.niveaux?.resistances))}</p><ul>${(p.risques || []).map(x => `<li>${esc(txt(x))}</li>`).join('')}</ul></div>`).join('')}</div><div class="warn">Aide à l'analyse, pas un conseil en investissement. Les scores sont un modèle heuristique.</div>`;
+  $('#gStatus').textContent = '';
+};
+
+/* ---- Journal ---- */
+const JCOLS = ['date', 'actif', 'sens', 'entree', 'sortie', 'statut', 'pnl', 'these'];
+function jStats(j) {
+  const c = j.filter(x => x.pnl != null), w = c.filter(x => x.pnl > 0).length, sum = c.reduce((a, x) => a + x.pnl, 0);
+  return { n: j.length, closed: c.length, rate: c.length ? Math.round(w / c.length * 100) : null, sum, mean: c.length ? sum / c.length : null };
+}
+const fr = n => n == null ? '—' : String(+n.toFixed(4)).replace('.', ',');
+function renderJournal() {
+  const j = store.get('journal', []), st = jStats(j);
+  $('#journalView').innerHTML = `<div class="card"><b>Stats</b> : ${st.n} entrée(s) · taux de réussite ${st.rate == null ? 'N/A' : st.rate + ' %'} · PnL cumulé ${fr(st.sum)} % · PnL moyen ${fr(st.mean)} %</div>
+  <div class="card"><b>Nouvelle entrée</b><div class="grid">
+   <input id="j-date" type="date" value="${utcDay()}"><input id="j-asset" placeholder="Actif (EUR/USD)" list="pl"><datalist id="pl">${PAIRS.map(p => `<option>${p}</option>`).join('')}</datalist>
+   <select id="j-side"><option>Achat</option><option>Vente</option><option>Neutre</option></select><input id="j-entry" placeholder="Entrée (1,0850)"><input id="j-exit" placeholder="Sortie">
+   <select id="j-status"><option>idée</option><option>ouvert</option><option>clôturé</option></select><input id="j-pnl" placeholder="PnL % (ex. -0,8)"><input id="j-thesis" placeholder="Thèse"></div>
+   <button class="btn pri" data-act="jadd">Ajouter</button> <button class="btn" data-act="jexport">Export CSV</button> <label class="btn">Import CSV<input type="file" id="jfile" accept=".csv,text/csv" hidden></label></div>
+  <div class="card scroll"><table class="tbl"><tr><th>Date</th><th>Actif</th><th>Sens</th><th>Entrée</th><th>Sortie</th><th>Statut</th><th>PnL %</th><th>Thèse</th><th></th></tr>
+  ${j.map((x, i) => `<tr><td>${esc(x.date)}</td><td>${esc(x.asset)}</td><td>${esc(x.side)}</td><td>${fr(x.entry)}</td><td>${fr(x.exit)}</td><td>${esc(x.status)}</td><td class="${cls(x.pnl)}">${fr(x.pnl)}</td><td style="white-space:normal;max-width:320px">${esc(x.thesis)}</td><td><button class="btn" data-act="jdel" data-i="${i}">✕</button></td></tr>`).join('')}</table></div>`;
+  $('#jfile').onchange = e => importCSV(e.target.files[0]);
+}
+RENDER.journal = renderJournal;
+ACT.jadd = () => {
+  const j = store.get('journal', []), asset = $('#j-asset').value.trim(); if (!asset) return toast('Indique l\'actif.');
+  j.push({ id: Date.now(), date: $('#j-date').value || utcDay(), asset, side: $('#j-side').value, entry: toNum($('#j-entry').value), exit: toNum($('#j-exit').value), status: $('#j-status').value, pnl: toNum($('#j-pnl').value), thesis: $('#j-thesis').value.trim() });
+  store.set('journal', j); renderJournal();
+};
+ACT.jdel = t => { const j = store.get('journal', []); j.splice(+t.dataset.i, 1); store.set('journal', j); renderJournal(); };
+const csvCell = v => { let s = v == null ? '' : typeof v === 'number' ? String(v).replace('.', ',') : String(v); if (/^[=+\-@]/.test(s) && typeof v === 'string') s = "'" + s; return /[";\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+ACT.jexport = () => {
+  const j = store.get('journal', []), csv = '\ufeff' + JCOLS.join(';') + '\n' + j.map(x => [x.date, x.asset, x.side, x.entry, x.exit, x.status, x.pnl, x.thesis].map(csvCell).join(';')).join('\n');
+  try { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })); a.download = 'journal-macroedge.csv'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); }
+  catch { copyText(csv); }
+};
+function parseCSV(t) {
+  t = t.replace(/^\ufeff/, ''); const d = (t.split('\n')[0].match(/;/g) || []).length ? ';' : ','; const rows = []; let row = [], cur = '', q = false;
+  for (let i = 0; i < t.length; i++) { const c = t[i];
+    if (q) { if (c === '"' && t[i + 1] === '"') { cur += '"'; i++; } else if (c === '"') q = false; else cur += c; }
+    else if (c === '"') q = true; else if (c === d) { row.push(cur); cur = ''; } else if (c === '\n' || c === '\r') { if (c === '\r' && t[i + 1] === '\n') i++; row.push(cur); cur = ''; if (row.some(x => x)) rows.push(row); row = []; } else cur += c; }
+  row.push(cur); if (row.some(x => x)) rows.push(row); return rows;
+}
+async function importCSV(f) {
+  if (!f) return; const rows = parseCSV(await f.text()), h = rows.shift().map(x => x.trim().toLowerCase()); const ix = k => h.indexOf(k);
+  if (ix('actif') < 0) return toast('CSV non reconnu : colonne « actif » absente.');
+  const j = store.get('journal', []); rows.forEach(r => j.push({ id: Date.now() + Math.random(), date: r[ix('date')] || utcDay(), asset: r[ix('actif')], side: r[ix('sens')] || 'Neutre', entry: toNum(r[ix('entree')]), exit: toNum(r[ix('sortie')]), status: r[ix('statut')] || 'idée', pnl: toNum(r[ix('pnl')]), thesis: (r[ix('these')] || '').replace(/^'/, '') }));
+  store.set('journal', j); toast(rows.length + ' ligne(s) importée(s).'); renderJournal();
+}
+
+/* ---- Réglages ---- */
+const CURS = ['USD', 'EUR', 'GBP', 'JPY', 'CHF', 'AUD', 'CAD', 'NZD'], PROV = ['twelvedata', 'alphavantage', 'frankfurter', 'stooq', 'finnhub', 'forexfactory', 'gemini', ...RSS_NAMES];
+function saveFromForm() {
+  if (!$('#k-gemini')) return getSettings(); const s = getSettings();
+  ['gemini', 'gemini2', 'twelvedata', 'alphavantage', 'finnhub'].forEach(k => s.keys[k] = $('#k-' + k).value.trim());
+  s.model = $('#s-model').value.trim() || DEFAULTS.model; s.relays = $('#s-relays').value.split('\n').map(x => x.trim()).filter(Boolean); s.primary = $('#s-primary').value;
+  PAIRS.forEach(p => s.active[p] = $('#a-' + p.replace('/', '')).checked); Object.keys(s.weights).forEach(k => s.weights[k] = toNum($('#w-' + k).value) ?? 0);
+  s.demo = $('#s-demo').checked; s.avNews = $('#s-avnews').checked; s.disabled.history = s.order.history.filter(n => !$('#o-' + n).checked);
+  CURS.forEach(c => { const g = f => toNum($(`#r-${c}-${f}`).value), r = { policy: g('policy'), y2: g('y2'), policyPrev: g('policyPrev'), y2Prev: g('y2Prev'), date: $(`#r-${c}-date`).value }; if (r.policy != null || r.y2 != null) s.rates[c] = r; else delete s.rates[c]; });
+  saveSettings(s); return s;
+}
+function renderSettings() {
+  const s = getSettings(), sum = Object.values(s.weights).reduce((a, b) => a + (+b || 0), 0);
+  const ph = PROV.map(n => { const x = Health.get(n), st = Health.state(n); return `<tr><td>${esc(n)}</td><td class="${st === 'OK' ? 'up' : st === 'dégradé' || st === 'non testé' ? 'mu' : 'dn'}">${esc(st)}</td><td>${x.lastOk ? fmtTime(x.lastOk) : '—'}</td><td style="white-space:normal">${x.lastErr ? esc(x.lastErr.msg) + ' (' + fmtTime(x.lastErr.at) + ')' : '—'}</td><td>${Health.today(n)}${DAILY_LIMIT[n] ? ' / ' + DAILY_LIMIT[n] : ''}</td></tr>`; }).join('');
+  $('#settingsView').innerHTML = `
+  <div class="card"><b>Clés API</b> <span class="mu">(stockées dans ce navigateur, envoyées au relais, jamais loguées)</span><div class="grid">
+   ${[['gemini', 'Gemini'], ['gemini2', 'Gemini (2ᵉ clé, secours)'], ['twelvedata', 'Twelve Data'], ['alphavantage', 'Alpha Vantage'], ['finnhub', 'Finnhub']].map(([k, l]) => `<label>${l}<br><input type="password" id="k-${k}" autocomplete="off" value="${esc(s.keys[k])}" style="width:100%"></label>`).join('')}
+   <label>Modèle Gemini<br><input id="s-model" value="${esc(s.model)}" style="width:100%"></label></div></div>
+  <div class="card"><b>Relais</b> (une URL par ligne ; principal puis secours)<br><textarea id="s-relays" rows="3" style="width:100%">${esc(s.relays.join('\n') || (relayList()[0] || ''))}</textarea>
+   <label>Source principale <select id="s-primary">${[['auto', 'Auto'], ['twelvedata', 'Twelve Data'], ['alphavantage', 'Alpha Vantage']].map(([v, l]) => `<option value="${v}" ${s.primary === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+   <p><b>Ordre de la chaîne « historique »</b> (désactive un fournisseur en le décochant)</p>${s.order.history.map((n, i) => `<div><input type="checkbox" id="o-${n}" ${(s.disabled.history || []).includes(n) ? '' : 'checked'}> ${esc(n)} <button class="btn" data-act="ord" data-i="${i}" data-d="-1">↑</button><button class="btn" data-act="ord" data-i="${i}" data-d="1">↓</button></div>`).join('')}
+   <p class="mu" style="font-size:12px">Les chaînes calendrier et news suivent l'ordre fixe du relais (Finnhub → ForexFactory ; Finnhub → flux RSS → Alpha Vantage).</p>
+   <label><input type="checkbox" id="s-avnews" ${s.avNews ? 'checked' : ''}> Alpha Vantage NEWS_SENTIMENT (1 appel, jamais au-delà de 80 % du quota)</label><br><label><input type="checkbox" id="s-demo" ${s.demo ? 'checked' : ''}> Mode démo (calendrier fictif, affiché « DÉMO »)</label></div>
+  <div class="card"><b>Paires actives</b><br>${PAIRS.map(p => `<label style="margin-right:10px"><input type="checkbox" id="a-${p.replace('/', '')}" ${s.active[p] ? 'checked' : ''}> ${p}</label>`).join('')}
+   <p><b>Poids du scoring</b> (somme ${sum} % ; renormalisés si un composant manque)</p>${[['policy', 'Politique monétaire'], ['momentum', 'Momentum'], ['structure', 'Structure'], ['risk', 'Risque'], ['news', 'News']].map(([k, l]) => `<label style="margin-right:10px">${l} <input id="w-${k}" value="${s.weights[k]}" size="3"></label>`).join('')}</div>
+  <div class="card scroll"><b>Taux directeurs et rendements 2 ans</b> <span class="badge">manuel</span> <button class="btn" data-act="importUS">Importer les taux US (Alpha Vantage)</button>
+   <table class="tbl"><tr><th>Devise</th><th>Taux dir. %</th><th>Rdt 2 ans %</th><th>Taux précédent</th><th>Rdt précédent</th><th>Date</th></tr>
+   ${CURS.map(c => { const r = s.rates[c] || {}; return `<tr><td>${c}</td>${['policy', 'y2', 'policyPrev', 'y2Prev'].map(f => `<td><input id="r-${c}-${f}" value="${r[f] ?? ''}" size="6"></td>`).join('')}<td><input type="date" id="r-${c}-date" value="${esc(r.date || '')}"></td></tr>`; }).join('')}</table></div>
+  <div class="card"><button class="btn pri" data-act="save">Enregistrer</button> <button class="btn" data-act="testGemini">Tester Gemini</button> <button class="btn" data-act="testData">Tester les données</button> <button class="btn" data-act="retest">Tout retester</button> <button class="btn" data-act="clear" style="border-color:var(--dn)">Effacer mes données</button><div id="testOut"></div></div>
+  <div class="card scroll"><b>Santé des sources et quotas du jour</b><table class="tbl"><tr><th>Source</th><th>État</th><th>Dernier succès</th><th>Dernière erreur</th><th>Requêtes aujourd'hui</th></tr>${ph}</table></div>`;
+}
+RENDER.settings = renderSettings;
+ACT.save = () => { saveFromForm(); toast('Réglages enregistrés.'); renderSettings(); };
+ACT.ord = t => { const s = saveFromForm(), i = +t.dataset.i, j = i + +t.dataset.d; if (j < 0 || j >= s.order.history.length) return; [s.order.history[i], s.order.history[j]] = [s.order.history[j], s.order.history[i]]; saveSettings(s); renderSettings(); };
+async function runTest(what) {
+  saveFromForm(); $('#testOut').innerHTML = '<p class="mu">Test en cours…</p>';
+  try {
+    const r = await relay('test', { what }); const res = r.results || {};
+    Object.entries(res).forEach(([n, v]) => { Health.reset(n); v.ok ? Health.ok(n) : Health.fail(n, v.error, /quota|429/i.test(v.error)); });
+    $('#testOut').innerHTML = '<ul>' + Object.entries(res).map(([n, v]) => `<li class="${v.ok ? 'up' : 'dn'}">${esc(n)} : ${v.ok ? 'OK ' + esc(txt(v.detail)) : esc(v.error)} <span class="mu">(${v.ms} ms)</span></li>`).join('') + '</ul>';
+  } catch (e) { $('#testOut').innerHTML = `<p class="dn">${esc(e.message)}</p>`; }
+  renderSettingsKeepOut();
+}
+function renderSettingsKeepOut() { const o = $('#testOut').innerHTML; renderSettings(); $('#testOut').innerHTML = o; }
+ACT.testGemini = () => runTest('gemini'); ACT.testData = async () => { await runTest('twelvedata'); const o = $('#testOut').innerHTML; await runTest('all'); $('#testOut').innerHTML = $('#testOut').innerHTML || o; }; ACT.retest = () => runTest('all');
+ACT.importUS = async () => {
+  saveFromForm(); try { const r = await relay('rates'); const s = getSettings(); s.rates.USD = r.USD; saveSettings(s); toast('Taux US importés (source : Alpha Vantage).'); renderSettings(); } catch (e) { toast('Import impossible : ' + e.message); }
+};
+ACT.clear = async () => { if (await askModal('<p>Effacer clés, réglages, caches, journal et analyses de ce navigateur ?</p>', 'Effacer')) { store.clearAll(); toast('Données effacées.'); applyTheme(); showTab('settings'); } };
+RENDER.settings = renderSettings;
+
+/* ---- démarrage ---- */
+function boot() {
+  applyTheme(); if (!store.get('settings', null)) { const s = getSettings(); if (relayList().length) s.relays = relayList(); saveSettings(s); }
+  showTab('dashboard');
+  if (relayList().length) loadAll(false); else { toast('Configure d\'abord l\'URL de ton relais (Réglages).', 8000); showTab('settings'); }
+}
+window.runSelfTests = runSelfTests; boot();
+</script>
+</body>
+</html>

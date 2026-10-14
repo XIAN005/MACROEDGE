@@ -1,8 +1,7 @@
 {
-  "name": "macroedge-relay",
-  "version": "1.1.0",
+  "name": "macroedge-desk-relay",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Relais serverless (Anthropic / OpenAI / Gemini + Alpha Vantage + calendrier) pour MacroEdge AI",
   "engines": { "node": "22.x" }
 }

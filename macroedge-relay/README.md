@@ -1,37 +1,51 @@
-# MacroEdge AI — déploiement
+# MacroEdge Desk
 
-Structure attendue (important : `analyze.js` DOIT être dans `api/`) :
+Tableau de bord macro Forex / Or : scoring déterministe + analyse rédigée par Gemini. Sans build.
 
+## Structure exacte des dossiers
 ```
-macroedge-relay/
-├── index.html        ← l'application (servie à la racine)
-├── api/analyze.js    ← relais serverless
-├── package.json
-└── vercel.json
+macroedge-desk/
+├── index.html          # front (HTML + CSS + JS vanilla)
+├── package.json        # "type":"module", "engines":{"node":"22.x"}
+├── vercel.json         # maxDuration 30 pour api/analyze.js
+└── api/
+    └── analyze.js      # relais serverless (une route, ?action=)
 ```
+(`index.part1-4.html` ne sont que les morceaux de livraison : ne les déploie pas.)
 
-## Déploiement Vercel
-1. Envoie ce dossier sur GitHub puis **Add New → Project → Import**, ou lance `npx vercel` dans le dossier.
-2. Ouvre l'URL `https://xxx.vercel.app` : l'app se charge et utilise automatiquement `/api/analyze` comme relais.
-3. Onglet **Réglages** : choisis le fournisseur IA, colle ta clé, clique **Tester la connexion**.
+## Déploiement
+1. Crée un dépôt GitHub, pousse les 4 fichiers ci-dessus.
+2. vercel.com → *Add New Project* → importe le dépôt → *Deploy* (aucun réglage de build).
+3. Ouvre `https://TON-PROJET.vercel.app` : l'URL du relais est préremplie. Sur GitHub Pages, colle `https://TON-PROJET.vercel.app` dans Réglages → Relais (`/api/analyze` est ajouté automatiquement).
+4. Facultatif : variables d'environnement Vercel `GEMINI_API_KEY`, `TWELVEDATA_API_KEY`, `ALPHAVANTAGE_API_KEY`, `FINNHUB_API_KEY` (utilisées si le client n'envoie pas de clé).
 
-Si tu ouvres `index.html` en local (file://), colle l'URL complète du relais dans Réglages.
+## Clés gratuites
+- Gemini : https://aistudio.google.com/apikey
+- Twelve Data : https://twelvedata.com (800 req/jour, 8/min)
+- Alpha Vantage : https://www.alphavantage.co/support/#api-key (25 req/jour, 5/min)
+- Finnhub : https://finnhub.io (le calendrier économique peut exiger un plan payant : ForexFactory prend alors le relais)
+Saisis-les dans Réglages (stockées dans le navigateur, champs password).
 
-## Modèles par défaut (champ Modèle vide)
-- Anthropic : `claude-sonnet-5-5` · OpenAI : `gpt-4o` · Gemini : `gemini-2.5-flash`
-
-## Données de marché
-- **Prix** : Alpha Vantage (clé gratuite, 25 requêtes/jour, 5/min). Chaque actualisation = 3 requêtes ; un cache de 10 min évite de gaspiller le quota au rechargement. Le plan gratuit ne donne pas la variation journalière : l'app affiche l'heure de mise à jour.
-- **Calendrier** : Finnhub si clé (plan compatible), sinon repli automatique sur ForexFactory (sans clé).
-- Variables d'environnement optionnelles côté Vercel : `ALPHAVANTAGE_API_KEY`, `FINNHUB_API_KEY`.
-
-## Tests
+## Tests curl (remplace `$R` par ton URL de relais)
 ```bash
-curl "https://TON-URL/api/analyze?action=calendar"
-curl "https://TON-URL/api/analyze?action=quotes&apiKey=CLE_ALPHA&symbols=EUR/USD"
-curl -X POST https://TON-URL/api/analyze -H "Content-Type: application/json" \
-  -d '{"provider":"anthropic","apiKey":"sk-ant-...","messages":[{"role":"user","content":"OK ?"}]}'
+R=https://TON-PROJET.vercel.app/api/analyze
+curl "$R?action=test&what=frankfurter"
+curl "$R?action=test&what=stooq"
+curl "$R?action=test&what=forexfactory"
+curl -H "x-twelvedata-key: CLE" "$R?action=test&what=twelvedata"
+curl -H "x-alphavantage-key: CLE" "$R?action=test&what=alphavantage"
+curl -H "x-finnhub-key: CLE" "$R?action=test&what=finnhub"
+curl -H "x-gemini-key: CLE" "$R?action=test&what=gemini"
+curl "$R?action=history&symbol=EUR/USD&order=frankfurter,stooq"
+curl -H "x-twelvedata-key: CLE" "$R?action=quotes&symbols=EUR/USD"
+curl "$R?action=calendar"
+curl "$R?action=news"
+curl -H "x-alphavantage-key: CLE" "$R?action=rates"
+curl -X POST -H "Content-Type: application/json" -H "x-gemini-key: CLE" \
+  -d '{"system":"JSON seulement","prompt":"{\"ping\":1} -> {\"pong\":true}"}' "$R?action=chat"
+# simuler une panne :
+curl "$R?action=history&symbol=EUR/USD&debug_fail=twelvedata,alphavantage"
 ```
+Console du navigateur : `runSelfTests()` (indicateurs et moteur de score).
 
-## Sécurité
-Le relais ne stocke rien. Il est public (CORS `*`) : pour le verrouiller, remplace `*` par ton domaine dans `api/analyze.js`. Si tu définis `ALPHAVANTAGE_API_KEY`, n'importe qui connaissant l'URL peut consommer ton quota.
+> Aide à l'analyse, pas un conseil en investissement. Les scores sont un modèle heuristique.
