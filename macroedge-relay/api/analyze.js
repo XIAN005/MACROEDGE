@@ -98,7 +98,7 @@ async function getDaily(sym, keys, q) {
     if (NEEDS_KEY[name] && !keys[name]) { attempts.push({ source: name, error: 'clé absente' }); continue; }
     n++;
     try {
-      const candles = validate(await H[name](sym, keys[name], q), name);
+      const raw = await H[name](sym, keys[name], q), candles = validate(Array.isArray(raw) ? raw.filter((b, i, a) => i === a.length - 1 || b.date !== a[i + 1].date) : raw, name); // doublons consécutifs écartés (garde le dernier) ; l'ordre inversé reste rejeté
       return { symbol: sym, candles, source: name + (name === 'stooq' ? ' (non officiel)' : ''), fetched_at: new Date().toISOString(), attempts };
     } catch (e) { attempts.push({ source: name, error: e.message, quota: !!e.quota, status: e.status }); }
   }
