@@ -100,7 +100,7 @@ async function getDaily(sym, keys, q) {
     try {
       const candles = validate(await H[name](sym, keys[name], q), name);
       return { symbol: sym, candles, source: name + (name === 'stooq' ? ' (non officiel)' : ''), fetched_at: new Date().toISOString(), attempts };
-    } catch (e) { attempts.push({ source: name, error: e.message, quota: !!e.quota }); }
+    } catch (e) { attempts.push({ source: name, error: e.message, quota: !!e.quota, status: e.status }); }
   }
   const err = E('aucune source ne fournit ' + sym, 502, 'history'); err.attempts = attempts; throw err;
 }
@@ -155,29 +155,29 @@ async function getCalendar(keys, q) {
 
 // ---------- news ----------
 const FEEDS = [
-  ['Fed', 'https://www.federalreserve.gov/feeds/press_all.xml', true],
-  ['BCE', 'https://www.ecb.europa.eu/rss/press.html', true],
-  ['BoE', 'https://www.bankofengland.co.uk/rss/news', true],
-  ['BoJ', 'https://www.boj.or.jp/en/rss/whatsnew.xml', true],
+  ['Fed', 'https://www.federalreserve.gov/feeds/press_all.xml', true, 'USD'],
+  ['BCE', 'https://www.ecb.europa.eu/rss/press.html', true, 'EUR'],
+  ['BoE', 'https://www.bankofengland.co.uk/rss/news', true, 'GBP'],
+  ['BoJ', 'https://www.boj.or.jp/en/rss/whatsnew.xml', true, 'JPY'],
   ['FXStreet', 'https://www.fxstreet.com/rss/news', false]
 ];
 const KW = [[/\b(fed|dollar|powell|fomc)\b/i, 'USD'], [/\b(ecb|bce|lagarde|euro)\b/i, 'EUR'], [/\b(boe|bank of england|bailey|sterling|pound)\b/i, 'GBP'], [/\b(boj|ueda|yen)\b/i, 'JPY'], [/\b(snb|swiss franc)\b/i, 'CHF'], [/\b(rba|aussie)\b/i, 'AUD'], [/\b(boc|loonie)\b/i, 'CAD'], [/\b(rbnz|kiwi)\b/i, 'NZD'], [/\b(gold|xau)\b/i, 'XAU'], [/\b(oil|crude|opec|wti)\b/i, 'WTI']];
 const tagCur = t => [...new Set(KW.filter(([r]) => r.test(t)).map(([, c]) => c))];
 const norm = s => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 const unesc = s => s.replace(/<!\[CDATA\[|\]\]>/g, '').replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"').trim();
-function parseRss(xml, source, official) {
+function parseRss(xml, source, official, cur) {
   const items = xml.match(/<(item|entry)[\s>][\s\S]*?<\/\1>/g) || [];
   return items.map(it => {
     const g = tag => { const m = it.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, 'i')); return m ? unesc(m[1]) : ''; };
     const link = g('link') || (it.match(/<link[^>]*href="([^"]+)"/i) || [])[1] || '';
     const d = new Date(g('pubDate') || g('published') || g('updated') || g('dc:date'));
-    return { title: g('title'), url: link, source, published_at: isNaN(d) ? null : d.toISOString(), impact_hint: official ? 'banque centrale' : null };
+    return { title: g('title'), url: link, source, published_at: isNaN(d) ? null : d.toISOString(), impact_hint: official ? 'banque centrale' : null, cur: cur || null };
   }).filter(x => x.title && x.published_at);
 }
 async function getNews(keys, q) {
-  const tasks = FEEDS.map(([n, u, o]) => (async () => {
+  const tasks = FEEDS.map(([n, u, o, c]) => (async () => {
     if (fail(q, 'rss_' + n.toLowerCase())) throw E('panne simulée', 503);
-    return parseRss(await tget(u, { headers: { 'User-Agent': UA, Accept: 'application/rss+xml,application/xml,text/xml' } }, n), n, o);
+    return parseRss(await tget(u, { headers: { 'User-Agent': UA, Accept: 'application/rss+xml,application/xml,text/xml' } }, n), n, o, c);
   })());
   if (keys.finnhub) tasks.push((async () => {
     const j = await jget('https://finnhub.io/api/v1/news?category=forex', { headers: { 'X-Finnhub-Token': keys.finnhub } }, 'finnhub');
@@ -195,7 +195,7 @@ async function getNews(keys, q) {
   const news = all.filter(n => Date.parse(n.published_at) >= cutoff && /^https:\/\//.test(n.url || '') || (Date.parse(n.published_at) >= cutoff && !n.url))
     .sort((a, b) => b.published_at.localeCompare(a.published_at))
     .filter(n => { const k = norm(n.title); if (seenT.has(k) || (n.url && seenU.has(n.url))) return false; seenT.add(k); if (n.url) seenU.add(n.url); return true; })
-    .slice(0, 60).map((n, i) => ({ id: 'n' + i + '_' + norm(n.title).slice(0, 12).replace(/ /g, ''), title: n.title, url: n.url, source: n.source, published_at: n.published_at, currencies: tagCur(n.title), impact_hint: n.impact_hint }));
+    .slice(0, 60).map((n, i) => ({ id: 'n' + i + '_' + norm(n.title).slice(0, 12).replace(/ /g, ''), title: n.title, url: n.url, source: n.source, published_at: n.published_at, currencies: [...new Set([...tagCur(n.title), ...(n.cur ? [n.cur] : [])])], impact_hint: n.impact_hint }));
   return { news, sources_status, fetched_at: new Date().toISOString() };
 }
 
